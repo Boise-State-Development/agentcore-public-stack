@@ -14,13 +14,13 @@ public enum LoadProblem: Equatable, Sendable {
     case serverError
 }
 
-/// The signed-in user's conversations, as both screens reach them.
+/// What the signed-in screens call app-api with.
 ///
 /// Holds the sealed session for the life of one sign-in. A `401` from any
 /// call means the session is gone, and is handed to `onSessionEnded` so the
 /// app goes back to sign-in exactly as it does at launch.
 @MainActor
-public struct ConversationSource {
+public struct SignedInAPI {
     let client: AgentCoreClient
     let sealed: String
     let onSessionEnded: @MainActor () -> Void
@@ -31,21 +31,27 @@ public struct ConversationSource {
         self.onSessionEnded = onSessionEnded
     }
 
-    func page(limit: Int, after nextToken: String?) async throws(AgentCoreClientError) -> ConversationPage {
+    /// Run one call with the session, and end the session on a `401`.
+    func call<T>(
+        _ body: (AgentCoreClient, String) async throws(AgentCoreClientError) -> T
+    ) async throws(AgentCoreClientError) -> T {
         do {
-            return try await client.conversations(session: sealed, limit: limit, after: nextToken)
+            return try await body(client, sealed)
         } catch {
             if error == .unauthorized { onSessionEnded() }
             throw error
         }
     }
 
+    func page(limit: Int, after nextToken: String?) async throws(AgentCoreClientError) -> ConversationPage {
+        try await call { client, sealed throws(AgentCoreClientError) in
+            try await client.conversations(session: sealed, limit: limit, after: nextToken)
+        }
+    }
+
     func transcript(of conversationId: String) async throws(AgentCoreClientError) -> Transcript {
-        do {
-            return try await client.transcript(session: sealed, conversationId: conversationId)
-        } catch {
-            if error == .unauthorized { onSessionEnded() }
-            throw error
+        try await call { client, sealed throws(AgentCoreClientError) in
+            try await client.transcript(session: sealed, conversationId: conversationId)
         }
     }
 }
@@ -67,13 +73,13 @@ public final class ConversationListModel {
     public private(set) var loadMoreFailed = false
     public var canLoadMore: Bool { nextToken != nil }
 
-    public let source: ConversationSource
+    public let source: SignedInAPI
     private var nextToken: String?
     /// Bumped by each refresh, so a page that was in flight when the list was
     /// replaced is dropped instead of appended to the new one.
     private var generation = 0
 
-    public init(source: ConversationSource) {
+    public init(source: SignedInAPI) {
         self.source = source
     }
 
@@ -156,9 +162,9 @@ public final class TranscriptModel {
     public private(set) var problem: LoadProblem?
     public private(set) var isLoading = false
 
-    private let source: ConversationSource
+    private let source: SignedInAPI
 
-    public init(conversationId: String, source: ConversationSource) {
+    public init(conversationId: String, source: SignedInAPI) {
         self.conversationId = conversationId
         self.source = source
     }
@@ -179,7 +185,13 @@ public final class TranscriptModel {
 extension SessionModel {
     /// The conversation list for whoever is signed in, or `nil` when nobody is.
     public func makeConversationList() -> ConversationListModel? {
-        guard case .signedIn = phase, let source = conversationSource() else { return nil }
-        return ConversationListModel(source: source)
+        guard case .signedIn = phase, let api = signedInAPI() else { return nil }
+        return ConversationListModel(source: api)
+    }
+
+    /// The inbox for whoever is signed in, or `nil` when nobody is.
+    public func makeInbox() -> InboxModel? {
+        guard case .signedIn = phase, let api = signedInAPI() else { return nil }
+        return InboxModel(api: api)
     }
 }

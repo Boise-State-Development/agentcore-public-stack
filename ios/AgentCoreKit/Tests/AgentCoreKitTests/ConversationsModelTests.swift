@@ -18,7 +18,7 @@ struct ConversationsModelTests {
     ) throws -> ConversationListModel {
         let client = AgentCoreClient(server: try Fixtures.server, transport: transport)
         return ConversationListModel(
-            source: ConversationSource(client: client, sealed: "sealed-value") { ended.count += 1 })
+            source: SignedInAPI(client: client, sealed: "sealed-value") { ended.count += 1 })
     }
 
     /// Answers the first and second list pages by `next_token`.

@@ -1,25 +1,52 @@
 import AgentCoreKit
 import SwiftUI
 
-/// The signed-in app: the conversation list, a transcript beside it on iPad
-/// or pushed on iPhone, and the account sheet with Sign out.
+/// The signed-in app: Conversations and the Inbox as tabs, each with the
+/// account sheet (and Sign out) one tap away.
 struct SignedInView: View {
     let session: SessionModel
     let user: SessionUser
     @State private var list: ConversationListModel?
+    @State private var inbox: InboxModel?
 
     init(session: SessionModel, user: SessionUser) {
         self.session = session
         self.user = user
         self._list = State(initialValue: session.makeConversationList())
+        self._inbox = State(initialValue: session.makeInbox())
     }
 
     var body: some View {
-        if let list {
-            ConversationsView(list: list, session: session, user: user)
+        if let list, let inbox {
+            SignedInTabs(list: list, inbox: inbox, session: session, user: user)
         } else {
             // Signed in with no stored session can't last: the next check signs out.
             AccountView(session: session, user: user)
+        }
+    }
+}
+
+struct SignedInTabs: View {
+    let list: ConversationListModel
+    let inbox: InboxModel
+    let session: SessionModel
+    let user: SessionUser
+
+    var body: some View {
+        TabView {
+            Tab("Conversations", systemImage: "bubble.left.and.bubble.right") {
+                ConversationsView(list: list, session: session, user: user)
+            }
+            Tab("Inbox", systemImage: "tray") {
+                InboxView(inbox: inbox, session: session, user: user)
+            }
+            .badge(inbox.unreadCount)
+        }
+        // The badge needs the count before the Inbox tab is ever opened.
+        .task {
+            if !inbox.hasLoaded {
+                await inbox.refresh()
+            }
         }
     }
 }
@@ -35,15 +62,7 @@ struct ConversationsView: View {
         NavigationSplitView {
             ConversationListView(list: list, selection: $selection)
                 .navigationTitle("Conversations")
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showingAccount = true
-                        } label: {
-                            Label("Account", systemImage: "person.crop.circle")
-                        }
-                    }
-                }
+                .toolbar { AccountButton(showingAccount: $showingAccount) }
         } detail: {
             if let selection {
                 TranscriptView(
@@ -61,6 +80,21 @@ struct ConversationsView: View {
         }
         .sheet(isPresented: $showingAccount) {
             AccountView(session: session, user: user, showsDone: true)
+        }
+    }
+}
+
+/// Opens the account sheet.
+struct AccountButton: ToolbarContent {
+    @Binding var showingAccount: Bool
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showingAccount = true
+            } label: {
+                Label("Account", systemImage: "person.crop.circle")
+            }
         }
     }
 }
@@ -125,8 +159,9 @@ struct AccountView: View {
     }
 }
 
-#Preview("Conversations") {
-    ConversationsView(list: PreviewData.list(), session: PreviewData.session(), user: PreviewData.user)
+#Preview("Signed in") {
+    SignedInTabs(
+        list: PreviewData.list(), inbox: PreviewData.inbox(), session: PreviewData.session(), user: PreviewData.user)
 }
 
 #Preview("Account") {

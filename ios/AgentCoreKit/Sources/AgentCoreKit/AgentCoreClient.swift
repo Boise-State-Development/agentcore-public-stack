@@ -100,6 +100,66 @@ public struct AgentCoreClient: Sendable {
         return Transcript(pages: pages)
     }
 
+    /// `GET /notifications`: one page of the inbox, newest first, with the unread count.
+    public func inbox(
+        session: String,
+        limit: Int,
+        after cursor: String? = nil
+    ) async throws(AgentCoreClientError) -> InboxPage {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let cursor {
+            query.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        let (data, _) = try await send(request(path: "notifications", query: query, session: session))
+        return try decode(InboxPage.self, from: data, keys: .useDefaultKeys)
+    }
+
+    /// `POST /notifications/{id}/read`.
+    public func markRead(session: String, notificationId: String) async throws(AgentCoreClientError) {
+        let path = ["notifications", notificationId, "read"]
+        _ = try await send(request(components: path, method: "POST", session: session))
+    }
+
+    /// `POST /notifications/read-all`.
+    public func markAllRead(session: String) async throws(AgentCoreClientError) {
+        _ = try await send(request(path: "notifications/read-all", method: "POST", session: session))
+    }
+
+    /// `GET /notifications/{id}/prompts`: the live prompts behind a waiting run's row.
+    public func inboxPrompts(
+        session: String,
+        notificationId: String
+    ) async throws(AgentCoreClientError) -> [InboxPrompt] {
+        let path = ["notifications", notificationId, "prompts"]
+        let (data, _) = try await send(request(components: path, session: session))
+        return try decode(InboxPromptsPage.self, from: data, keys: .useDefaultKeys).prompts
+    }
+
+    /// `POST /notifications/{id}/respond`: answer every prompt at once. The run
+    /// continues in the background; follow it with `run(session:id:)`.
+    /// - Returns: The resumed run's id.
+    public func respond(
+        session: String,
+        notificationId: String,
+        answers: [(interruptId: String, response: JSONValue)]
+    ) async throws(AgentCoreClientError) -> String {
+        let path = ["notifications", notificationId, "respond"]
+        var request = request(components: path, method: "POST", session: session)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = RespondRequest(responses: answers.map { RespondRequest.Answer(interruptId: $0, response: $1) })
+        // Answers carry the user's own keys (question headers, form field names), which a
+        // key strategy would rewrite.
+        request.httpBody = try encode(body, keys: .useDefaultKeys)
+        let (data, _) = try await send(request)
+        return try decode(RespondResponse.self, from: data, keys: .useDefaultKeys).resumeRunId
+    }
+
+    /// `GET /runs/{runId}`.
+    public func run(session: String, id runId: String) async throws(AgentCoreClientError) -> RunStatus {
+        let (data, _) = try await send(request(components: ["runs", runId], session: session))
+        return try decode(RunStatus.self, from: data, keys: .useDefaultKeys)
+    }
+
     /// 50 pages of 200 is far past any conversation compaction allows.
     static let maxTranscriptPages = 50
 
@@ -176,9 +236,12 @@ public struct AgentCoreClient: Sendable {
         }
     }
 
-    private func encode<T: Encodable>(_ value: T) throws(AgentCoreClientError) -> Data {
+    private func encode<T: Encodable>(
+        _ value: T,
+        keys: JSONEncoder.KeyEncodingStrategy = .convertToSnakeCase
+    ) throws(AgentCoreClientError) -> Data {
         let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.keyEncodingStrategy = keys
         do {
             return try encoder.encode(value)
         } catch {
@@ -211,4 +274,17 @@ private struct ExchangeResponse: Decodable {
     let session: String
     let expiresAt: Int
     let user: SessionUser
+}
+
+private struct RespondRequest: Encodable {
+    struct Answer: Encodable {
+        let interruptId: String
+        let response: JSONValue
+    }
+
+    let responses: [Answer]
+}
+
+private struct RespondResponse: Decodable {
+    let resumeRunId: String
 }
