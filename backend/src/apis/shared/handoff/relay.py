@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from pydantic import ValidationError
@@ -41,7 +42,7 @@ _RELAYED_KINDS = frozenset({"oauth", "tool_approval", "user_question", "browser_
 
 
 def relayed_prompts_from_row(
-    row: Optional[Dict[str, Any]], kinds: frozenset = _RELAYED_KINDS
+    row: Optional[Dict[str, Any]], kinds: frozenset = _RELAYED_KINDS, *, now: Optional[datetime] = None
 ) -> List[RelayedPrompt]:
     """The prompts a target's ``META`` row is waiting on, as the source relays them.
 
@@ -49,7 +50,8 @@ def relayed_prompts_from_row(
     since one connection answers every interrupt waiting on that provider. A browser sign-in
     carries only its interrupt id: the live view is the target's screen, so the relay links there.
     ``kinds`` is which breadcrumbs count; the inbox (answer-from-inbox §3.4) asks for its own,
-    by the same rule.
+    by the same rule. ``now`` is the clock the pause's expiry is judged against (the wall clock
+    when omitted), so a caller that judges the rest of a row at one instant judges this at it too.
     """
     if not row:
         return []
@@ -62,7 +64,7 @@ def relayed_prompts_from_row(
         except ValidationError:
             logger.warning("Skipping an unreadable pending interrupt on a handoff target")
     expires_at = paused.get("expiresAt") if isinstance(paused, dict) else None
-    if derive_awaiting_input((i.kind for i in interrupts), expires_at) is None:
+    if derive_awaiting_input((i.kind for i in interrupts), expires_at, now) is None:
         return []
 
     prompts: List[RelayedPrompt] = []

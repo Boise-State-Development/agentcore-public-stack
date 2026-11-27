@@ -101,7 +101,9 @@ def read_inbox_pause(
     if snapshot_expiry is not None and snapshot_expiry <= now_expiry_format(current):
         return InboxPause("expired")
     wanted = row_interrupt_ids(notification)
-    live = {p.interrupt_id: p for p in relayed_prompts_from_row(meta_row, kinds=INBOX_PROMPT_KINDS)}
+    live = {
+        p.interrupt_id: p for p in relayed_prompts_from_row(meta_row, kinds=INBOX_PROMPT_KINDS, now=current)
+    }
     if not wanted or any(i not in live for i in wanted):
         return InboxPause("gone")
     return InboxPause("live", [live[i] for i in wanted])

@@ -54,6 +54,14 @@ class TestPause:
         assert pause.state == "live"
         assert json.loads(pause.prompts[0].elicitation)["serverName"] == "GitHub"
 
+    def test_the_pause_is_judged_at_the_given_instant_not_the_wall_clock(self):
+        """The snapshot's expiry is long past on any real clock; at ``then`` it is a day away."""
+        then = datetime(2020, 1, 1, 12, 0, tzinfo=timezone.utc)
+        row = _row(("f", "mcp_elicitation"), expires="2020-01-08T12:00:00Z")
+        meta = {"pendingInterrupts": [FORM], "pausedTurn": {"expiresAt": (then + timedelta(days=1)).isoformat()}}
+
+        assert read_inbox_pause(row, meta, now=then).state == "live"
+
     def test_one_prompt_gone_is_the_pause_gone(self):
         row = _row(("f", "mcp_elicitation"), ("g", "tool_approval"))
         meta = {"pendingInterrupts": [FORM], "pausedTurn": {"expiresAt": (NOW + timedelta(days=1)).isoformat()}}
