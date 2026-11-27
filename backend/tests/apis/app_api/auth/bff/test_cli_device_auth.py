@@ -645,6 +645,32 @@ class TestEndToEnd:
         assert SESSION_COOKIE_NAME in blob
         assert CSRF_COOKIE_NAME in blob
 
+    def test_device_callback_never_repins_a_headless_grant(self, cli_app, monkeypatch):
+        """A terminal's session must never become the one a scheduled-runs grant holds."""
+        repin = AsyncMock()
+        monkeypatch.setattr(bff_routes, "_repin_grant_after_web_sign_in", repin)
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+        state, nonce = _verify(client, auth["user_code"])
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+
+        client.get(f"/auth/callback?code=auth-code&state={state}")
+
+        repin.assert_not_awaited()
+
+    def test_normal_spa_callback_repins_a_headless_grant(self, cli_app, monkeypatch):
+        repin = AsyncMock()
+        monkeypatch.setattr(bff_routes, "_repin_grant_after_web_sign_in", repin)
+        client = TestClient(cli_app, follow_redirects=False)
+        login = client.get("/auth/login")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(login.headers["location"]).query)
+        client.cookies.set(OAUTH_STATE_COOKIE_NAME, _issued_binding_cookie(login))
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=query["nonce"][0]))
+
+        client.get(f"/auth/callback?code=abc&state={query['state'][0]}")
+
+        repin.assert_awaited_once()
+
     def test_second_poll_after_claim_is_refused(self, cli_app, monkeypatch):
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()

@@ -81,6 +81,7 @@ from apis.shared.sessions_bff.refresh import (
 from apis.shared.sessions_bff.repository import SessionRepository
 
 from .config import BFFAuthConfig
+from .grant_tokens import grant_keeps_token, pin_grant
 from .cookies import (
     OAUTH_STATE_COOKIE_NAME,
     clear_oauth_state_cookie,
@@ -216,6 +217,34 @@ def _get_user_sync_service() -> Optional[UserSyncService]:
             logger.warning("BFF user-sync service init failed: %s", exc)
             return None
     return _user_sync_service
+
+
+def _get_grant_service():
+    """The headless-grant service, shared with ``/runs`` so tests patch one factory."""
+    from apis.app_api.runs.routes import get_headless_grant_service
+
+    return get_headless_grant_service()
+
+
+async def _repin_grant_after_web_sign_in(config: BFFAuthConfig, record: SessionRecord) -> None:
+    """Move an active headless grant onto a new web session. Never fails the sign-in.
+
+    One Query, plus one ``UpdateItem`` when there is an active grant, after the
+    session row exists and before the redirect: off any turn path. Only the
+    browser exit of the callback calls this. The terminal's device flow and the
+    phone's native exit return before it, so neither ever holds a grant's
+    token, and a revoked or ``needs_reauth`` grant is never revived here.
+    """
+    try:
+        await pin_grant(
+            record,
+            grants=_get_grant_service(),
+            repository=_get_repository(config),
+            cognito=_get_cognito_client(),
+            only_if_active=True,
+        )
+    except Exception:
+        logger.warning("Could not re-pin the headless grant at sign-in", exc_info=True)
 
 
 def _get_cognito_client() -> CognitoRefreshClient:
@@ -734,6 +763,10 @@ async def bff_callback(
     else:
         redirect_target = config.post_login_redirect_url
 
+    # A web sign-in moves the user's active headless grant onto this session,
+    # so scheduled runs follow the newest login (proactive-trust §5.2).
+    await _repin_grant_after_web_sign_in(config, record)
+
     response = RedirectResponse(
         url=redirect_target,
         status_code=status.HTTP_302_FOUND,
@@ -1018,6 +1051,16 @@ async def bff_logout(request: Request) -> Response:
     kills the access tokens minted from it. Deleting the row alone would
     leave the last access token valid for up to an hour wherever it had
     already been forwarded.
+
+    **Except the token the user's headless grant holds.** The app client has
+    no refresh-token rotation, so a grant pinned from this session holds the
+    very same token, and revoking it would silently stop every scheduled run
+    the user has (docs/specs/proactive-trust.md §5.2). In that case the row is
+    still deleted, so this client is signed out, but the token is left alive
+    server-side, in the grant only, and the response says so
+    (``scheduled_runs_continue``) for the SPA to tell the user. The grant is
+    bounded by its own window and revocable on ``/schedules``, which then
+    revokes the token (``grant_tokens.release_refresh_token``).
     """
     config = BFFAuthConfig.from_env()
     response = JSONResponse(
@@ -1072,9 +1115,19 @@ async def bff_logout(request: Request) -> Response:
         logger.debug("Local cache invalidation skipped for %s", session_id)
 
     if record is not None:
-        await _revoke_refresh_token(record.cognito_refresh_token, session_id=session_id)
+        if await grant_keeps_token(record, _get_grant_service()):
+            logger.info("Logout of session %s keeps its refresh token: the user's headless grant holds it", session_id)
+            _set_logout_body(response, {"post_logout_url": _cognito_logout_url(config), "scheduled_runs_continue": True})
+        else:
+            await _revoke_refresh_token(record.cognito_refresh_token, session_id=session_id)
 
     return response
+
+
+def _set_logout_body(response: JSONResponse, content: dict) -> None:
+    """Replace the logout response's JSON body, keeping the cookie headers already set on it."""
+    response.body = response.render(content)
+    response.headers["content-length"] = str(len(response.body))
 
 
 async def _revoke_refresh_token(refresh_token: str, *, session_id: str) -> None:

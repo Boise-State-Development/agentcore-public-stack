@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
@@ -10,6 +10,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
 import { BrandingService } from '../../../branding/branding.service';
+import { SCHEDULED_RUNS_CONTINUE_KEY } from '../bff-session.model';
 
 function pageshow(persisted: boolean): PageTransitionEvent {
   return new PageTransitionEvent('pageshow', { persisted });
@@ -69,6 +70,22 @@ describe('LoginPage', () => {
   const entra = { provider_id: 'entra', display_name: 'Entra' };
 
   beforeEach(() => configure());
+
+  describe('after a sign-out that kept scheduled runs going', () => {
+    afterEach(() => sessionStorage.removeItem(SCHEDULED_RUNS_CONTINUE_KEY));
+
+    it('says the scheduled runs keep running, once', () => {
+      sessionStorage.setItem(SCHEDULED_RUNS_CONTINUE_KEY, '1');
+      configure();
+
+      expect(fixture.nativeElement.textContent).toContain('Your scheduled runs keep running');
+      expect(sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY)).toBeNull();
+    });
+
+    it('says nothing after an ordinary sign-out', () => {
+      expect(fixture.nativeElement.textContent).not.toContain('scheduled runs');
+    });
+  });
 
   describe('back/forward cache restore', () => {
     it('clears the loading state left by a sign-in redirect', () => {
