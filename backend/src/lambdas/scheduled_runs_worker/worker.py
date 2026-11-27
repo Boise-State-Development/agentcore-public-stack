@@ -598,6 +598,11 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     if schedule is None:
         logger.info(f"Scheduled-runs worker: schedule {schedule_id} no longer exists; dropping run")
         return {"scheduleId": schedule_id, "result": "dropped"}
+    if schedule.state != "active":
+        # Paused (by its owner, its project or a guard) after the dispatcher
+        # re-armed it and before this run started: the pause wins.
+        logger.info(f"Scheduled-runs worker: schedule {schedule_id} is {schedule.state}; dropping run")
+        return {"scheduleId": schedule_id, "result": "dropped"}
 
     run_config: Dict[str, Any] = {}
     if schedule.model_id:
