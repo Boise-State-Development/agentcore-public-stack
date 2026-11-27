@@ -51,6 +51,10 @@ NotificationKind = Literal[
     # a tool approval. Written with no actor: the recipient is the schedule's owner.
     "agent_needs_approval",
     "agent_needs_input",
+    # The owner's headless grant lapses soon (proactive-trust §5.1): payload {scope: "grant",
+    # expiresAt, scheduleCount}. One per grant epoch (login), written by the scheduled-runs
+    # worker after a run; marked read once a re-pin moves the expiry past the warning window.
+    "connection_expiring",
     # Quota requests and extensions (quota-requests spec §11.1). Not project
     # events: projectId is unset and the payload carries the ids.
     "quota_request_submitted",

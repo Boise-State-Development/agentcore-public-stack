@@ -98,6 +98,9 @@ class CognitoRefreshBearerAuth:
         refresh_client: Optional[CognitoRefreshClient] = None,
     ) -> None:
         self._grants = grants or HeadlessGrantService()
+        #: The grant the last successful mint used. The runner copies its expiry onto
+        #: ``RunResult``, so the worker can warn before it lapses with no extra read.
+        self.last_grant = None
         self._refresh_client = refresh_client or CognitoRefreshClient()
 
     async def mint_bearer_for_user(self, user_id: str) -> str:
@@ -146,4 +149,5 @@ class CognitoRefreshBearerAuth:
             )
 
         await self._grants.record_use(grant.grant_id)
+        self.last_grant = grant
         return refreshed.access_token

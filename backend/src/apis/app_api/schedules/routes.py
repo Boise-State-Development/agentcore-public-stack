@@ -49,7 +49,6 @@ from apis.shared.scheduled_prompts.service import (
     UNSET,
     InvalidTimezoneError,
     ScheduledPromptLimitExceeded,
-    compute_next_run_at,
     create_scheduled_prompt,
     interval_to_minutes,
     delete_scheduled_prompt,
@@ -64,8 +63,6 @@ from apis.shared.scheduled_prompts.budget import (
     SHORT_INTERVAL_MINUTES,
     default_max_cost_per_day,
     requires_budget,
-    respect_hold,
-    utc_now,
 )
 from apis.shared.scheduled_prompts.actions import list_schedule_actions
 from apis.shared.scheduled_prompts.runs import list_schedule_runs
@@ -214,15 +211,13 @@ async def _check_act_without_asking(user: User, entries: Optional[List[str]]) ->
 
 
 def _resume_time(schedule) -> str:
-    """A resumed schedule's ``nextRunAt``: its cadence from now, never inside a budget hold."""
-    next_run_at = compute_next_run_at(
-        schedule.cadence,
-        schedule.hour_local,
-        schedule.timezone,
-        weekday=schedule.weekday,
-        interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
-    )
-    return respect_hold(schedule, next_run_at, utc_now())
+    """A resumed schedule's ``nextRunAt``: its cadence from now, never inside a budget hold.
+
+    The same function reconnecting a connector resumes with (``reconnect.resume_next_run_at``).
+    """
+    from apis.shared.scheduled_prompts.reconnect import resume_next_run_at
+
+    return resume_next_run_at(schedule)
 
 
 async def _check_watch_fields(

@@ -326,6 +326,37 @@ class HeadlessGrantService:
             revoked_any = True
         return revoked_any
 
+    async def mark_expiry_warned(self, grant_id: str, token_issued_at: int) -> bool:
+        """Claim this grant epoch's one expiry warning. Returns whether this caller won it.
+
+        An epoch is one ``token_issued_at``: the login the grant is anchored on.
+        The write sets ``expiry_warned_for`` to it, conditional on the grant still
+        being active on that same epoch and not already warned for it, so two
+        runs finishing together send one warning, and a re-pin (a new login, a
+        new epoch) can warn again when its own window closes
+        (docs/specs/proactive-trust.md §5.1).
+        """
+
+        def _mark() -> bool:
+            try:
+                self._get_table().update_item(
+                    Key=self._key(grant_id),
+                    UpdateExpression="SET expiry_warned_for = :iss",
+                    ConditionExpression=(
+                        "#s = :active AND token_issued_at = :iss "
+                        "AND (attribute_not_exists(expiry_warned_for) OR expiry_warned_for <> :iss)"
+                    ),
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":active": _STATUS_ACTIVE, ":iss": int(token_issued_at)},
+                )
+                return True
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                    return False
+                raise
+
+        return await asyncio.to_thread(_mark)
+
     async def mark_needs_reauth(self, grant_id: str, refresh_token: str) -> bool:
         """Mark a grant whose refresh token Cognito refused. Returns whether it changed it.
 

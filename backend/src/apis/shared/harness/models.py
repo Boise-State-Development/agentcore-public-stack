@@ -102,6 +102,13 @@ class RunResult:
     #: ``None`` when the frame never came: a timeout, a cut stream, a provider
     #: error. A schedule's budget counts it (docs/specs/proactive-trust.md §4.1).
     cost_usd: Optional[float] = None
+    #: The headless grant the run minted from (``CognitoRefreshBearerAuth``): its id,
+    #: when it lapses (``ttl``) and the login it is anchored on (``token_issued_at``),
+    #: all epoch seconds. The worker warns from them before the grant lapses
+    #: (docs/specs/proactive-trust.md §5.1). ``None`` when the run minted another way.
+    grant_id: Optional[str] = None
+    grant_expires_at: Optional[int] = None
+    grant_issued_at: Optional[int] = None
     #: Calls the Runtime's action audit recorded as ``write`` / ``unclassified``
     #: (their ``tool_result`` frames' ``audited``). A watch run with a write is
     #: never quiet (docs/specs/proactive-trust.md §7.3).

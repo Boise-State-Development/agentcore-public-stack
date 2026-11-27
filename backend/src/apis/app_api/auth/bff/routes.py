@@ -32,6 +32,7 @@ fixation). See `bff_login` and `_binding_matches`.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -226,7 +227,7 @@ def _get_grant_service():
     return get_headless_grant_service()
 
 
-async def _repin_grant_after_web_sign_in(config: BFFAuthConfig, record: SessionRecord) -> None:
+async def _repin_grant_after_web_sign_in(config: BFFAuthConfig, record: SessionRecord, email: Optional[str] = None) -> None:
     """Move an active headless grant onto a new web session. Never fails the sign-in.
 
     One Query, plus one ``UpdateItem`` when there is an active grant, after the
@@ -234,15 +235,22 @@ async def _repin_grant_after_web_sign_in(config: BFFAuthConfig, record: SessionR
     browser exit of the callback calls this. The terminal's device flow and the
     phone's native exit return before it, so neither ever holds a grant's
     token, and a revoked or ``needs_reauth`` grant is never revived here.
+
+    A re-pin that moves the grant past the warning window also settles the
+    owner's "scheduled runs stop soon" bell rows (proactive-trust §5.1).
     """
     try:
-        await pin_grant(
+        grant = await pin_grant(
             record,
             grants=_get_grant_service(),
             repository=_get_repository(config),
             cognito=_get_cognito_client(),
             only_if_active=True,
         )
+        if grant is not None:
+            from apis.shared.scheduled_prompts.grant_warning import grant_expiry_settled
+
+            await asyncio.to_thread(grant_expiry_settled, email, grant.ttl)
     except Exception:
         logger.warning("Could not re-pin the headless grant at sign-in", exc_info=True)
 
@@ -765,7 +773,7 @@ async def bff_callback(
 
     # A web sign-in moves the user's active headless grant onto this session,
     # so scheduled runs follow the newest login (proactive-trust §5.2).
-    await _repin_grant_after_web_sign_in(config, record)
+    await _repin_grant_after_web_sign_in(config, record, claims.email)
 
     response = RedirectResponse(
         url=redirect_target,

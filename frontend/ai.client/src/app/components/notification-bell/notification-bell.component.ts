@@ -53,6 +53,18 @@ function describeSchedule(n: AppNotification, who: string, project: string): str
 }
 
 /** A personal schedule the platform stopped: always the reader's own, never in a project. */
+/**
+ * The user's headless grant lapses soon (proactive-trust §5.1). Urgent in its last 24 hours,
+ * when the one fix (renewing on Schedules, or signing in again) is still possible but not for long.
+ */
+export function describeConnectionExpiring(n: AppNotification, now: number = Date.now()): string {
+  const expires = typeof n.payload?.expiresAt === 'string' ? Date.parse(n.payload.expiresAt) : NaN;
+  if (Number.isNaN(expires)) return 'Your scheduled runs stop soon unless you renew them in Schedules.';
+  const when = new Date(expires).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const line = `Your scheduled runs stop ${when} unless you renew them in Schedules.`;
+  return expires - now <= 24 * 60 * 60 * 1000 ? `Urgent — ${line}` : line;
+}
+
 function describeOwnSchedule(n: AppNotification): string {
   const label = typeof n.payload?.label === 'string' && n.payload.label ? ` “${n.payload.label}”` : '';
   if (n.payload?.reason === 'budget') return describeBudget(n, label);
@@ -193,6 +205,7 @@ export function describeNotification(n: AppNotification, quotaPeriodType?: strin
   if (n.kind.startsWith('quota_')) return describeQuota(n, quotaPeriodType);
   if (n.kind.startsWith('handoff_')) return describeHandoff(n);
   if (n.kind === 'schedule_paused') return describeOwnSchedule(n);
+  if (n.kind === 'connection_expiring') return describeConnectionExpiring(n);
   if (n.kind === 'agent_item') return describeAgentItem(n);
   if (NEEDS_USER_NOTIFICATION_KINDS.has(n.kind)) return describeAgentNeeds(n);
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
@@ -597,7 +610,7 @@ export class NotificationBellComponent {
       return;
     }
     // A stopped personal schedule opens /schedules, where it can be resumed.
-    if (n.kind === 'schedule_paused') {
+    if (n.kind === 'schedule_paused' || n.kind === 'connection_expiring') {
       void this.router.navigate(['/schedules']);
       this.sidenav.close();
       return;

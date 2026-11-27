@@ -296,6 +296,11 @@ async def run_agent_headless(
         result.error = "auth: could not mint a bearer for the user"
         await governance.on_run_end(result=result)
         raise
+    grant = getattr(auth, "last_grant", None)
+    if grant is not None:
+        result.grant_id = grant.grant_id
+        result.grant_expires_at = grant.ttl
+        result.grant_issued_at = grant.token_issued_at
 
     base_url = invocations_base_url or os.environ.get(
         "INFERENCE_API_URL", "http://localhost:8001"

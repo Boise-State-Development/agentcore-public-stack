@@ -5,6 +5,7 @@ import { Router, provideRouter } from '@angular/router';
 import {
   NotificationBellComponent,
   describeAgentNeeds,
+  describeConnectionExpiring,
   describeNotification,
   needsUserExpired,
   relativeTime,
@@ -26,6 +27,27 @@ function notif(over: Partial<AppNotification> = {}): AppNotification {
     createdAt: '2026-09-24T00:00:00Z', readAt: null, ...over,
   };
 }
+
+describe('describeConnectionExpiring (proactive-trust §5.1)', () => {
+  const now = Date.parse('2026-12-01T12:00:00Z');
+  const row = (expiresAt: string) =>
+    notif({ kind: 'connection_expiring', projectId: null, projectName: null, actorEmail: null, payload: { scope: 'grant', expiresAt, scheduleCount: 3 } });
+
+  it('names the day the runs stop and where to renew', () => {
+    const text = describeConnectionExpiring(row('2026-12-03T18:00:00Z'), now);
+    expect(text).toMatch(/^Your scheduled runs stop .+ unless you renew them in Schedules\.$/);
+  });
+
+  it('is urgent in its last day', () => {
+    expect(describeConnectionExpiring(row('2026-12-02T06:00:00Z'), now)).toMatch(/^Urgent — /);
+  });
+
+  it('reads sensibly without a date', () => {
+    expect(describeConnectionExpiring(notif({ kind: 'connection_expiring', payload: {} }), now)).toBe(
+      'Your scheduled runs stop soon unless you renew them in Schedules.',
+    );
+  });
+});
 
 describe('describeNotification', () => {
   it.each([
