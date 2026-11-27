@@ -166,6 +166,46 @@ class TestReleaseRefreshToken:
         cognito.revoke.assert_not_awaited()
 
 
+class TestNativePinRecovery:
+    @pytest.mark.asyncio
+    async def test_the_phones_session_never_becomes_the_pin(self):
+        grants = FakeGrants(_grant(token="web.t", pinned="sess-web"))
+        phone = _record("sess-phone", "phone.t")
+        phone.client = "native"
+
+        result = await grant_tokens.pin_grant(phone, grants=grants, repository=FakeSessions(), cognito=_cognito())
+
+        assert result is not None and result.pinned_session_id == "sess-web"
+        assert grants.enable_calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_web_sign_in_moves_a_grant_off_the_phone_and_keeps_the_phone_signed_in(self):
+        """A grant pinned to the phone before the fix recovers at the next web sign-in."""
+        grants = FakeGrants(_grant(token="phone.t", pinned="sess-phone"))
+        phone = _record("sess-phone", "phone.t")
+        phone.client = "native"
+        cognito = _cognito()
+
+        grant = await grant_tokens.pin_grant(
+            _record("sess-web", "web.t"),
+            grants=grants,
+            repository=FakeSessions({"sess-phone": phone}),
+            cognito=cognito,
+            only_if_active=True,
+        )
+
+        assert grant is not None and grant.pinned_session_id == "sess-web"
+        cognito.revoke.assert_not_awaited()  # the phone still holds its token
+
+    def test_only_a_cookie_presented_non_native_session_may_pin(self):
+        web, phone = _record(), _record()
+        phone.client = "native"
+        assert grant_tokens.may_pin(web, from_header=False)
+        assert not grant_tokens.may_pin(web, from_header=True)  # the terminal
+        assert not grant_tokens.may_pin(phone, from_header=True)
+        assert not grant_tokens.may_pin(phone, from_header=False)
+
+
 class TestPinGrant:
     @pytest.mark.asyncio
     async def test_sign_in_repins_an_active_grant_and_releases_the_old_token(self):

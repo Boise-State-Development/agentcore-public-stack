@@ -221,6 +221,13 @@ class GrantEnableResponse(GrantStatusResponse):
 # ─── Routes ─────────────────────────────────────────────────────────────────
 
 
+#: The answer when the phone or the terminal asks for a run and scheduled runs are off.
+NOT_ENABLED_FROM_THIS_CLIENT = (
+    "Scheduled runs aren't turned on for your account. Turn them on in the web app's "
+    "Schedules page, then try again here."
+)
+
+
 async def _resolve_grant(request: Request, user: User) -> HeadlessGrant:
     """Create-on-enable: pin the live session's token, else use an existing grant.
 
@@ -232,14 +239,31 @@ async def _resolve_grant(request: Request, user: User) -> HeadlessGrant:
     works; having neither is a 409, not a 401 — the caller *is*
     authenticated, they just have no credential the platform may act
     headlessly with.
+
+    Only a browser session ever becomes the grant's pin. The phone and the
+    terminal (header-presented sessions, or a native row) use the active grant
+    as it is, and get a 409 when there is none, so neither can enable
+    unattended runs on its own token (``grant_tokens.may_pin``).
     """
     grants = get_headless_grant_service()
+    from apis.app_api.auth.bff import grant_tokens
+
     session_record = getattr(request.state, "bff_session", None)
+    from_header = bool(getattr(request.state, "bff_session_from_header", False))
+    if session_record is not None and not grant_tokens.may_pin(session_record, from_header=from_header):
+        # The phone or the terminal: use the grant as it is, never move it onto
+        # this session (``grant_tokens.may_pin``). Only the web app turns
+        # scheduled runs on, so with no active grant this refuses.
+        grant = await grants.get_active_grant(user.user_id)
+        if grant is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=NOT_ENABLED_FROM_THIS_CLIENT,
+            )
+        return grant
     if session_record is not None:
         # Re-pinning to this session also revokes the token the grant held
         # before, once no live session holds it (``grant_tokens``).
-        from apis.app_api.auth.bff import grant_tokens
-
         from apis.shared.scheduled_prompts.grant_warning import grant_expiry_settled
 
         repository, cognito = get_grant_token_deps()

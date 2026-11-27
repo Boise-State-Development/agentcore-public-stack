@@ -13,6 +13,7 @@ import time
 from typing import Optional
 
 import pytest
+from types import SimpleNamespace
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -184,6 +185,7 @@ class FakeSessionRecord:
     username = "user1"
     cognito_refresh_token = "rt-live"
     created_at = NOW - 3600
+    is_native = False
 
 
 class FakeSessionRepository:
@@ -238,6 +240,7 @@ def _make_client(
     flag: Optional[str] = None,
     grants: Optional[FakeGrantService] = None,
     with_session_record: bool = False,
+    session_kind: str = "web",
     run_result: Optional[RunResult] = None,
     run_error: Optional[Exception] = None,
     mint_error: Optional[Exception] = None,
@@ -280,7 +283,12 @@ def _make_client(
     if with_session_record:
         @app.middleware("http")
         async def attach_session(request: Request, call_next):
-            request.state.bff_session = FakeSessionRecord()
+            record = FakeSessionRecord()
+            # "web": the cookie; "cli": the terminal's `Authorization: BFF`;
+            # "native": the phone (header-presented, and a native row).
+            record.is_native = session_kind == "native"
+            request.state.bff_session = record
+            request.state.bff_session_from_header = session_kind in ("cli", "native")
             return await call_next(request)
 
     app.include_router(runs_routes.router)
@@ -704,6 +712,68 @@ class TestGrantRoutes:
         client.delete("/runs/grant")
 
         assert h.cognito.revoked == []
+
+
+class TestPhoneAndTerminalNeverMoveTheGrant:
+    """Only a browser session becomes the grant's pin (``grant_tokens.may_pin``).
+
+    A grant pinned to the phone's or the terminal's session would stop every
+    scheduled run when that device is revoked or signed out, and a phone's
+    session ends 30 days after its sign-in whatever the user does.
+    """
+
+    def test_run_now_from_the_terminal_leaves_the_pin(self, monkeypatch):
+        grant = _grant()
+        grant.pinned_session_id = "sess-web"
+        client, h = _make_client(monkeypatch, grants=FakeGrantService(grant), with_session_record=True, session_kind="cli")
+
+        response = client.post("/runs/now", json={"prompt": "ping"})
+
+        assert response.status_code == 202
+        assert h.grants.enable_calls == []
+        assert h.grants.grant.pinned_session_id == "sess-web"
+
+    def test_enable_from_the_phone_leaves_the_pin(self, monkeypatch):
+        grant = _grant()
+        grant.pinned_session_id = "sess-web"
+        client, h = _make_client(monkeypatch, grants=FakeGrantService(grant), with_session_record=True, session_kind="native")
+
+        assert client.post("/runs/grant").status_code == 200
+        assert h.grants.enable_calls == []
+        assert h.cognito.revoked == []
+
+    @pytest.mark.parametrize("kind", ["cli", "native"])
+    def test_with_no_grant_the_phone_or_terminal_cannot_turn_runs_on(self, monkeypatch, kind):
+        client, h = _make_client(monkeypatch, with_session_record=True, session_kind=kind)
+
+        response = client.post("/runs/grant")
+
+        assert response.status_code == 409
+        assert "web app" in response.json()["detail"]
+        assert h.grants.enable_calls == []
+
+    def test_a_web_session_still_renews(self, monkeypatch):
+        client, h = _make_client(monkeypatch, grants=FakeGrantService(_grant()), with_session_record=True, session_kind="web")
+
+        assert client.post("/runs/grant").status_code == 200
+        (call,) = h.grants.enable_calls
+        assert call["session_id"] == "sess-live"
+
+    @pytest.mark.asyncio
+    async def test_an_inbox_answer_from_the_phone_leaves_the_pin(self, monkeypatch):
+        """``POST /notifications/{id}/respond`` renews through ``_resolve_grant``."""
+        grant = _grant()
+        grant.pinned_session_id = "sess-web"
+        grants = FakeGrantService(grant)
+        monkeypatch.setattr(runs_routes, "get_headless_grant_service", lambda: grants)
+        record = FakeSessionRecord()
+        record.is_native = True
+        request = SimpleNamespace(state=SimpleNamespace(bff_session=record, bff_session_from_header=True))
+
+        resolved = await runs_routes._resolve_grant(request, _user())
+
+        assert resolved is grant
+        assert grants.enable_calls == []
 
 
 class TestRepinSettlesTheExpiryWarning:
