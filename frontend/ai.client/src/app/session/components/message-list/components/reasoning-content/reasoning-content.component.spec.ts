@@ -181,3 +181,154 @@ describe('ReasoningContentComponent — preview line', () => {
     expect(preview('First idea. Second idea. ')).toBe('First idea. Second idea.');
   });
 });
+
+/**
+ * Live thinking: while the model thinks, the box opens on its own and follows
+ * the text, then closes when the answer starts. A reloaded block never opens.
+ */
+describe('ReasoningContentComponent — live thinking', () => {
+  let fixture: ComponentFixture<ReasoningContentComponent>;
+
+  const SHORT = 'The user says hello. Reply briefly.';
+  const LONG =
+    'The user wants the number of domino tilings of a 4x7 board. Set up the transfer matrix over column profiles. ';
+
+  const render = (text: string, opts: { streaming?: boolean; durationMs?: number } = {}): HTMLElement => {
+    fixture.componentRef.setInput('contentBlock', {
+      type: 'reasoningContent',
+      reasoningContent: { reasoningText: { text } },
+      ...(opts.durationMs === undefined ? {} : { reasoningDurationMs: opts.durationMs }),
+    } as ContentBlock);
+    fixture.componentRef.setInput('isStreaming', opts.streaming ?? false);
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  };
+
+  const isOpen = (host: HTMLElement): boolean =>
+    host.querySelector('button')!.getAttribute('aria-expanded') === 'true';
+
+  /** jsdom lays nothing out, so give the box a height its text overflows. */
+  const sizeBox = (host: HTMLElement, scrollHeight: number, clientHeight = 192): HTMLElement => {
+    const box = host.querySelector<HTMLElement>('.reasoning-scroll')!;
+    Object.defineProperty(box, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(box, 'clientHeight', { value: clientHeight, configurable: true });
+    return box;
+  };
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [ReasoningContentComponent],
+    }).compileComponents();
+    fixture = TestBed.createComponent(ReasoningContentComponent);
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('opens on its own once the thinking outgrows the one-line preview', () => {
+    const host = render(LONG, { streaming: true });
+    expect(isOpen(host)).toBe(true);
+    expect(host.querySelector('.collapsible-content')!.hasAttribute('inert')).toBe(false);
+    expect(host.querySelector('.reasoning-scroll')!.textContent).toContain('transfer matrix');
+  });
+
+  it('stays shut for a thought the preview line already shows whole', () => {
+    const host = render(SHORT, { streaming: true });
+    expect(isOpen(host)).toBe(false);
+    expect(host.querySelector('button')!.textContent).toContain('The user says hello.');
+  });
+
+  it('closes when the model starts answering', () => {
+    render(LONG, { streaming: true });
+    const host = render(LONG, { streaming: true, durationMs: 4_000 });
+    expect(isOpen(host)).toBe(false);
+    expect(host.querySelector('.collapsible-content')!.hasAttribute('inert')).toBe(true);
+  });
+
+  it('closes when the turn ends without an answer', () => {
+    render(LONG, { streaming: true });
+    expect(isOpen(render(LONG, { streaming: false }))).toBe(false);
+  });
+
+  it('never opens a reloaded block, however long', () => {
+    expect(isOpen(render(LONG.repeat(5)))).toBe(false);
+    expect(isOpen(render(LONG.repeat(5), { durationMs: 9_000 }))).toBe(false);
+  });
+
+  it('uses the shorter box only while it is live', () => {
+    const live = render(LONG, { streaming: true }).querySelector('.reasoning-scroll')!;
+    expect(live.classList).toContain('max-h-48');
+    const done = render(LONG, { streaming: true, durationMs: 4_000 }).querySelector('.reasoning-scroll')!;
+    expect(done.classList).toContain('max-h-80');
+    expect(done.classList).not.toContain('max-h-48');
+  });
+
+  it('keeps the box shut once the user has closed it mid-thought', () => {
+    render(LONG, { streaming: true });
+    fixture.componentInstance.toggleExpanded();
+    expect(isOpen(render(LONG + LONG, { streaming: true }))).toBe(false);
+  });
+
+  it('keeps the box open after thinking when the user opened it', () => {
+    render(SHORT, { streaming: true });
+    fixture.componentInstance.toggleExpanded();
+    expect(isOpen(render(SHORT, { streaming: true, durationMs: 800 }))).toBe(true);
+  });
+
+  it('follows the newest text as it streams', () => {
+    const box = sizeBox(render(LONG, { streaming: true }), 400);
+    render(LONG + LONG, { streaming: true });
+    expect(box.scrollTop).toBe(400);
+  });
+
+  it('stops following once the reader scrolls back', () => {
+    const box = sizeBox(render(LONG, { streaming: true }), 400);
+    render(LONG + LONG, { streaming: true });
+    box.scrollTop = 40;
+    box.dispatchEvent(new Event('scroll'));
+    Object.defineProperty(box, 'scrollHeight', { value: 600, configurable: true });
+    render(LONG + LONG + LONG, { streaming: true });
+    expect(box.scrollTop).toBe(40);
+  });
+
+  it('leaves the box open for a reader who scrolled back when the answer starts', () => {
+    const box = sizeBox(render(LONG, { streaming: true }), 400);
+    box.scrollTop = 40;
+    box.dispatchEvent(new Event('scroll'));
+    expect(isOpen(render(LONG, { streaming: true, durationMs: 4_000 }))).toBe(true);
+  });
+
+  it('leaves the box open for a reader whose focus is in it', () => {
+    const host = render(LONG, { streaming: true });
+    document.body.appendChild(host);
+    host.querySelector<HTMLElement>('.reasoning-scroll')!.focus();
+    expect(isOpen(render(LONG, { streaming: true, durationMs: 4_000 }))).toBe(true);
+    host.remove();
+  });
+
+  it('opens without taking focus', () => {
+    const elsewhere = document.createElement('textarea');
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    const host = render(LONG, { streaming: true });
+    document.body.appendChild(host);
+    render(LONG + LONG, { streaming: true });
+    expect(document.activeElement).toBe(elsewhere);
+    host.remove();
+    elsewhere.remove();
+  });
+
+  it('announces that thinking started and how long it took, not the text', () => {
+    const status = () => (fixture.nativeElement as HTMLElement).querySelector('[role="status"]')!;
+    render(LONG, { streaming: true });
+    expect(status().textContent).toBe('Thinking');
+    render(LONG, { streaming: true, durationMs: 3_000 });
+    expect(status().textContent).toBe('Thought for 3s');
+    expect(status().classList).toContain('sr-only');
+  });
+
+  it('announces nothing for a reloaded block', () => {
+    const host = render(LONG, { durationMs: 3_000 });
+    expect(host.querySelector('[role="status"]')!.textContent).toBe('');
+  });
+});
