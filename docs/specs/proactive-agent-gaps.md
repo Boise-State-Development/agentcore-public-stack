@@ -235,7 +235,7 @@ Rules for the web app half:
 |---|---|---|---|---|
 | **0 — Paused jobs say so** (built) | G4 (`schedule_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner | The bell's text for `schedule_paused`, linking to the schedule | Nothing. Small, and worth doing alone |
 | **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Watcher fields in the schedule form, run history with quiet runs, job state view, `agent_item` in the bell | Slice 0 |
-| **2 — Answer from anywhere** | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Approve, Decline and answer in the bell | Slice 1's inbox kinds |
+| **2 — Answer from anywhere** (built) | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Approve, Decline and answer in the bell | Slice 1's inbox kinds |
 | **3 — Push** | G6, plus the iOS app's inbox and notification actions | `now` items reach a closed tab and a locked phone; Approve works from the notification after re-auth | Web Push: service worker, opt-in in Settings | Slice 2; iOS read-only conversations; `native-app-auth.md` PR 3 (devices) |
 | **4 — Trust** | G7, G8 pre-flight, G9 | Standing instructions, quiet hours, budgets, action audit | Quiet hours and channel rules in Settings, the Connections warning, the budget field, admin spend by `callKind` | Slice 1 |
 | **5 — Push triggers** | G3 step 2 | Near-real-time reaction for connectors that support it | Connecting a trigger in the schedule form | Slice 1 |
