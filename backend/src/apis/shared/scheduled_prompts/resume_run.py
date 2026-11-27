@@ -9,7 +9,7 @@ worker's event retry into a second resume (the start mark would stop it anyway).
 |---|---|---|
 | completed | answered, finished | resolution, finished, tokens added |
 | needs_user again | answered, waiting_again; a new row for the new pause | waiting_again, new expiresAt |
-| error ``resume_unavailable`` | answered_elsewhere, or expired | unchanged |
+| error ``resume_unavailable`` | answered_elsewhere, or expired | answered_elsewhere; unchanged when expired |
 | error HTTP 409 (the lease), transport error | retry | unchanged |
 | any other error, timeout | answered, failed | failed |
 | oauth_required | answered, waiting_again; a row naming the consent | waiting_again |
@@ -34,7 +34,7 @@ from apis.shared.timestamps import utc_now_iso
 
 from .models import ScheduledPrompt
 from .needs_user import live_pending_prompts, needs_user_kind, needs_user_payload, normalize_expiry
-from .runs import record_schedule_run_resume
+from .runs import record_schedule_run_answered_elsewhere, record_schedule_run_resume
 from .watch_run import decide_watch_outcome, next_watch_state
 from .watch_state import WatchState, clear_watch_pause, save_watch_state, set_watch_pause
 
@@ -127,6 +127,20 @@ async def _record_history(
         usage=result.usage,
         expires_at=expires_at,
         prompt_count=prompt_count,
+    )
+
+
+async def _mark_history_answered_elsewhere(schedule: Optional[ScheduledPrompt], notification: Notification) -> None:
+    run_id = notification.payload.get("runId")
+    finished_at = notification.payload.get("runFinishedAt")
+    if schedule is None or not isinstance(run_id, str) or not isinstance(finished_at, str):
+        return
+    await asyncio.to_thread(
+        record_schedule_run_answered_elsewhere,
+        schedule.user_id,
+        schedule.schedule_id,
+        run_finished_at=finished_at,
+        run_id=run_id,
     )
 
 
@@ -241,6 +255,11 @@ async def finish_resumed_run(
         state = "expired" if result.error_reason == "expired" else "answered_elsewhere"
         reason = None if state == "expired" else (result.error_reason or None)
         await _settle_row(service, email, notification, resume_run_id, resolved(state, reason=reason))
+        if state == "answered_elsewhere":
+            # The bell's list never settles this row now, so the run's history row would keep
+            # "Waiting for you" until its pause expired (§3.6 point 1). An expired one reads as
+            # expired from its own `expiresAt`.
+            await _mark_history_answered_elsewhere(schedule, notification)
         return {**summary, "row": state}
 
     if result.status == "error" and (result.http_status == 409 or (result.error or "").startswith("transport:")):

@@ -4002,13 +4002,22 @@ async def release_paused_turn_claim(session_id: str, user_id: str, owner: str) -
 
 
 async def clear_paused_turn(
-    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+    session_id: str,
+    user_id: str,
+    snapshot: Optional["SessionMetaSnapshot"] = None,
+    *,
+    watch_resume_report: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Drop the paused-turn snapshot for a session.
 
     Called on successful resume completion, on explicit dismiss, and at the
     start of a non-resume invocation so a stale snapshot from an abandoned
     turn doesn't poison a fresh one.
+
+    ``watch_resume_report`` is a finished watch-run resume's ``report``
+    (``scheduled_prompts.conversation_resume``), written in the **same** update
+    that removes the pause: the scheduled-runs worker treats "pause gone" as
+    "the resume is over", so a record written after the clear could be missed.
     """
     sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
     if not sessions_metadata_table:
@@ -4035,11 +4044,21 @@ async def clear_paused_turn(
         if "pausedTurn" not in existing:
             return  # Already clear
 
-        table.update_item(
-            Key={"PK": f"USER#{user_id}", "SK": sk},
-            UpdateExpression="REMOVE #pt",
-            ExpressionAttributeNames={"#pt": "pausedTurn"},
-        )
+        if watch_resume_report is not None:
+            from apis.shared.scheduled_prompts.conversation_resume import WATCH_RESUME_REPORT_ATTR
+
+            table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": sk},
+                UpdateExpression="REMOVE #pt SET #wr = :wr",
+                ExpressionAttributeNames={"#pt": "pausedTurn", "#wr": WATCH_RESUME_REPORT_ATTR},
+                ExpressionAttributeValues={":wr": _convert_floats_to_decimal(watch_resume_report)},
+            )
+        else:
+            table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": sk},
+                UpdateExpression="REMOVE #pt",
+                ExpressionAttributeNames={"#pt": "pausedTurn"},
+            )
         logger.info("Cleared paused_turn for session %s", session_id)
     except Exception as e:
         logger.error("Failed to clear paused_turn: %s", e, exc_info=True)
