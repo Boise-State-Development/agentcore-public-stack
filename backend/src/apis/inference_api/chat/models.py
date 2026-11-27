@@ -15,6 +15,7 @@ from apis.shared.handoff.brief import HandoffBriefRequest
 from apis.shared.handoff.delivery_turn import DELIVERY_FIELD_MAX_ITEMS, DeliveryAttachRequest
 from apis.shared.handoff.prompt_steps import WorkflowPromptRequest
 from apis.shared.handoff.turn import HandoffContextRequest
+from apis.shared.scheduled_prompts.watch_triage import WatchTriageRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 # Hard upper bound on a request's ``system_prompt``. The Agent Designer preview sends an
@@ -268,6 +269,12 @@ class InvocationRequest(BaseModel):
     # no tools, no lease; each step's claim on its HANDOFF# row is the guard. The stream carries one
     # `workflow_prompt_step` frame per step, then `done`. Absent, the request is unchanged.
     workflow_prompt: Optional[WorkflowPromptRequest] = None
+    # A quiet watcher's triage (docs/specs/quiet-watcher-triage.md §4.1): the stored probe's calls
+    # and baseline, sent by the scheduled-runs worker on the run's own headless session with the
+    # full run's tool selection fields beside it. Never a turn: the route resolves those tools
+    # through the turn's phases, replays the calls and streams one `watch_triage_result` frame,
+    # then `done`. Honoured only on a headless session while WATCH_TRIAGE_ENABLED is on.
+    watch_triage: Optional[WatchTriageRequest] = None
     # Deliveries (agent-handoffs-and-consults.md §4.8): the cards waiting on this conversation's
     # composer that this send carries, `[{deliveryId, text?}]`, `text` present only when the card
     # was edited. Each is attached exactly once (a conditional write, issued beside the agent build)

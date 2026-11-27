@@ -5988,6 +5988,80 @@ async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list
     )
 
 
+async def _watch_triage_tool_inputs(input_data: InvocationRequest, current_user: User) -> Optional[dict]:
+    """The tools a watcher's full run would carry, through the turn's own phases (triage §4.1).
+
+    The Agent (``resolve_turn_agent``, with no use recorded), then the effective tool ids
+    (``_resolve_effective_tools``), then the injected families (``_build_turn_tools``): the same
+    phases, in the same order, as the full run, so RBAC, the schedule's ``enabled_tools``, an
+    Agent's bindings and the admin's always-on set are the full run's own. A fresh headless
+    session holds no files, so no attachment auto-enable or document tool applies, as on the
+    run's first turn. ``None`` when the turn would not run for this caller. No ``report``: the
+    request carries no ``run_mode``, and the probe never includes it.
+    """
+    user_id = current_user.user_id
+    agent_tools_override = None
+    if input_data.rag_assistant_id:
+        resolved = await resolve_turn_agent(input_data, current_user, user_id, is_continuation=False, record_use=False)
+        if isinstance(resolved, StreamingResponse):
+            return None
+        for task in (
+            resolved.project_files_note_task,
+            resolved.project_memory_task,
+            resolved.kb_full_context_task,
+        ):
+            if task is not None:
+                task.cancel()
+        if resolved.project_id:
+            # Watch mode is personal only (quiet-watcher §2); a project's tools need its memory.
+            return None
+        agent_tools_override = resolved.tools_override
+    effective_enabled_tools = await _resolve_effective_tools(
+        input_data,
+        current_user,
+        user_id,
+        agent_tools_override,
+        turn_has_tabular=False,
+    )
+    turn_tools = await _build_turn_tools(
+        input_data,
+        current_user,
+        user_id,
+        effective_enabled_tools,
+        project_memory=None,
+        turn_has_document=False,
+    )
+    return {
+        "user_id": user_id,
+        "auth_token": current_user.raw_token,
+        "enabled_tools": effective_enabled_tools,
+        "extra_tools": turn_tools.extra_tools,
+    }
+
+
+def _watch_triage_invocation(request: InvocationRequest, current_user: User) -> StreamingResponse:
+    """A ``watch_triage`` invocation (quiet-watcher triage §4.1): replay a watcher's probe.
+
+    Never a turn and never ``_run_invocation``: no agent build, no history, no session row, no
+    lease, no model call. Honoured only on a headless session while the Runtime's
+    ``WATCH_TRIAGE_ENABLED`` is on, otherwise it answers ``flag_off``.
+    """
+    from apis.inference_api.chat.watch_triage import stream_watch_triage
+    from apis.shared.feature_flags import watch_triage_enabled
+    from apis.shared.scheduled_prompts.models import is_headless_session
+
+    enabled = watch_triage_enabled() and is_headless_session(request.session_id)
+    return StreamingResponse(
+        stream_watch_triage(
+            request.watch_triage,
+            enabled=enabled,
+            resolve_inputs=lambda: _watch_triage_tool_inputs(request, current_user),
+        ),
+        media_type="text/event-stream",
+        headers=_sse_headers(request.session_id),
+    )
+
+
 async def _handoff_brief_invocation(request: InvocationRequest, current_user: User):
     """A ``handoff_brief`` invocation (agent-handoffs-and-consults.md §4.5.1).
 
@@ -6139,16 +6213,19 @@ async def _prepare_invocation(request: InvocationRequest, current_user: User) ->
 
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
-    """The AgentCore Runtime invocation endpoint: a conversation turn, a handoff brief, or a run's prompt steps.
+    """The AgentCore Runtime invocation endpoint: a conversation turn, a handoff brief, a run's prompt steps, or a watcher's triage.
 
-    A ``workflow_prompt`` request goes through ``_workflow_prompt_invocation`` and a
-    ``handoff_brief`` request through ``_handoff_brief_invocation``; a prewarm call in prepare
-    mode through ``_prepare_invocation``; everything else is a turn, ``_run_invocation``.
+    A ``workflow_prompt`` request goes through ``_workflow_prompt_invocation``, a
+    ``watch_triage`` request through ``_watch_triage_invocation`` and a ``handoff_brief``
+    request through ``_handoff_brief_invocation``; a prewarm call in prepare mode through
+    ``_prepare_invocation``; everything else is a turn, ``_run_invocation``.
     """
     if request.warm and request.prepare:
         return await _prepare_invocation(request, current_user)
     if request.workflow_prompt is not None and not request.warm:
         return _workflow_prompt_invocation(request, current_user)
+    if request.watch_triage is not None and not request.warm:
+        return _watch_triage_invocation(request, current_user)
     if request.handoff_brief is not None and not request.warm:
         return await _handoff_brief_invocation(request, current_user)
     return await _run_invocation(request, current_user)

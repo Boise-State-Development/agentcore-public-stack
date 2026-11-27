@@ -148,6 +148,20 @@ export interface ScheduleRun {
   resumeOutcome?: string | null;
   resumeRunId?: string | null;
   resumedAt?: string | null;
+  /**
+   * A watcher's shadow triage (quiet-watcher triage §6.5): what tier 1 would have done. Not
+   * rendered while triage runs in shadow; absent on every other run.
+   */
+  triage?: ScheduleRunTriage | null;
+}
+
+/** Backend `ScheduleRun.triage`: enums and a duration only. */
+export interface ScheduleRunTriage {
+  /** `quiet`, `escalate`, or `skipped` (no triage was sent, triage §2.4). */
+  verdict: string;
+  reason: string;
+  tier?: number | null;
+  ms?: number | null;
 }
 
 /** Response from GET /schedules/{id}/runs: the newest 50, newest first. */

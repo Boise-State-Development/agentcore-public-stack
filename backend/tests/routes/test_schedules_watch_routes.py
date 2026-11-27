@@ -319,6 +319,7 @@ class TestWatchRoutes:
             "resumeOutcome": None,
             "resumeRunId": None,
             "resumedAt": None,
+            "triage": None,
         }
         assert listing.call_args.args == (USER_ID, SCHEDULE_ID)
 

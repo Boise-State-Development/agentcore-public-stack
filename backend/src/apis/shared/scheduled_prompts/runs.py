@@ -81,6 +81,9 @@ class ScheduleRun(BaseModel):
     resume_outcome: Optional[str] = Field(None, alias="resumeOutcome")
     resume_run_id: Optional[str] = Field(None, alias="resumeRunId")
     resumed_at: Optional[str] = Field(None, alias="resumedAt")
+    #: A watcher's shadow triage (quiet-watcher triage §6.5): ``{verdict, reason, tier?, ms?}``,
+    #: ``verdict`` one of ``quiet``, ``escalate`` or ``skipped``. Absent on every other run.
+    triage: Optional[Dict[str, Any]] = None
 
     @field_validator(
         "item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "prompt_count",
@@ -90,6 +93,14 @@ class ScheduleRun(BaseModel):
     def _int(cls, value: object) -> int:
         # DynamoDB returns numbers as Decimal.
         return int(value) if value is not None else 0
+
+    @field_validator("triage", mode="before")
+    @classmethod
+    def _triage(cls, value: object) -> Optional[Dict[str, Any]]:
+        if not isinstance(value, dict):
+            return None
+        # Enums stay strings; ``tier`` and ``ms`` come back from DynamoDB as Decimal.
+        return {k: (int(v) if k in ("tier", "ms") and v is not None else v) for k, v in value.items()}
 
 
 def _token_counts(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
@@ -128,10 +139,12 @@ def record_schedule_run(
     usage: Optional[Dict[str, Any]] = None,
     expires_at: Optional[str] = None,
     prompt_count: int = 0,
+    triage: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write one run row for a personal schedule. Never raises: a failure is logged.
 
-    Writes nothing for a project schedule, whose runs are on the project.
+    Writes nothing for a project schedule, whose runs are on the project. ``triage`` is a
+    watcher's shadow verdict (quiet-watcher triage §6.5), enums and a duration only.
     """
     if schedule.project_id:
         return
@@ -152,6 +165,8 @@ def record_schedule_run(
             item["expiresAt"] = expires_at
         if prompt_count:
             item["promptCount"] = int(prompt_count)
+        if triage:
+            item["triage"] = dict(triage)
         _service._get_table().put_item(Item=item)
     except Exception:
         logger.warning(
