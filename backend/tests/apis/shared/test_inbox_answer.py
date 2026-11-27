@@ -54,6 +54,20 @@ class TestPause:
         assert pause.state == "live"
         assert json.loads(pause.prompts[0].elicitation)["serverName"] == "GitHub"
 
+    def test_the_callers_now_judges_the_paused_turn_not_the_real_clock(self):
+        """Every date here is long past, so the real clock would read the pause expired (#2501).
+
+        ``read_inbox_pause`` judges all three expiries (the row's, the snapshot's, and the one
+        inside ``relayed_prompts_from_row``) at the ``now`` it was given.
+        """
+        then = datetime(2020, 1, 1, 12, 0, tzinfo=timezone.utc)
+        row = _row(("f", "mcp_elicitation"), expires="2020-01-08T12:00:00Z")
+        meta = {"pendingInterrupts": [FORM], "pausedTurn": {"expiresAt": (then + timedelta(days=1)).isoformat()}}
+        pause = read_inbox_pause(row, meta, now=then)
+        assert pause.state == "live"
+        assert [p.interrupt_id for p in pause.prompts] == ["f"]
+        assert read_inbox_pause(row, meta, now=then + timedelta(days=1)).state == "expired"
+
     def test_one_prompt_gone_is_the_pause_gone(self):
         row = _row(("f", "mcp_elicitation"), ("g", "tool_approval"))
         meta = {"pendingInterrupts": [FORM], "pausedTurn": {"expiresAt": (NOW + timedelta(days=1)).isoformat()}}

@@ -290,6 +290,14 @@ class TestWhatIsRelayed:
 
         assert (prompt.kind, prompt.provider_id) == ("oauth", "canvas")
 
+    def test_a_callers_now_decides_whether_the_pause_has_expired(self):
+        row = {"pendingInterrupts": [approval()], "pausedTurn": {"expiresAt": "2020-01-02T12:00:00Z"}}
+        before = datetime(2020, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+        assert relayed_prompts_from_row(row) == []
+        assert [p.interrupt_id for p in relayed_prompts_from_row(row, now=before)] == ["a1"]
+        assert relayed_prompts_from_row(row, now=before + timedelta(days=1)) == []
+
     def test_views_load_concurrently_one_read_per_waiting_handoff(self):
         views = [
             HandoffView(
