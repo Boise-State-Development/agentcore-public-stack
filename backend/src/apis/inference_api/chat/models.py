@@ -209,6 +209,21 @@ class InvocationRequest(BaseModel):
     # Runtime's PROACTIVE_RUNS_ENABLED is on). Absent on every interactive
     # request, so a web or terminal turn is byte-for-byte unchanged.
     run_mode: Optional[Literal["watch"]] = None
+    # The action audit (docs/specs/proactive-trust.md §7.2): the unattended run this
+    # request belongs to, sent only by the harness (`run_agent_headless`) for a scheduled
+    # run, a Run now or an inbox resume. With both, the Runtime's `HeadlessActionAudit`
+    # records each call that is not known to be read-only before it runs. A pause records
+    # them on its `PausedTurnSnapshot`, so a resume answered in the conversation still
+    # lands on the run's rows. Absent from the SPA, the TUI and the iOS app, so a request
+    # without them behaves exactly as before.
+    run_id: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    run_trigger: Optional[Literal["schedule", "run_now", "inbox_respond"]] = None
+    # The schedule a scheduled run belongs to, for the action rows' listing partition
+    # (`RUNACTS#{userId}#{scheduleId}`). Sent with `run_trigger: "schedule"` only.
+    run_schedule_id: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    # A watch schedule's `actWithoutAsking` (§7.5): `{catalogId}/{toolName}` entries the
+    # watch-run write gate lets run without asking. Read only on a watch run.
+    act_without_asking: Optional[List[str]] = Field(default=None, max_length=20)
     # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
     # the composer, rather than the whole conversation being bound to it.
     #

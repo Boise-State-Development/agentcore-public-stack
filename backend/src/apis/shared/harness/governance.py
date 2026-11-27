@@ -25,7 +25,9 @@ Hook points (called by ``run_agent_headless`` in this order):
    names, usage. Best-effort.
 
 Audit records are written to the sessions-metadata table under
-``PK=USER#{user_id}, SK=RUN#{run_id}``. The session listing queries
+``PK=USER#{user_id}, SK=RUN#{run_id}``. The Runtime also writes one action row per
+unattended call that is not known to be read-only, ``SK=RUNACT#{run_id}#{toolUseId}``
+(``record_action``, docs/specs/proactive-trust.md §7). The session listing queries
 ``begins_with(SK, 'S#ACTIVE#')`` and the GSI lookups use their own key
 shapes, so ``RUN#`` items are invisible to every existing access path.
 When the scheduler lands (Phase B), promote run-records to their own table
@@ -148,6 +150,127 @@ class RunAuditRecorder:
             },
         )
 
+    # ------------------------------------------------------------------ actions
+    #
+    # The action audit (docs/specs/proactive-trust.md §7.1): one ``RUNACT#`` row per
+    # call an unattended run makes that is not known to be read-only, written by the
+    # Runtime's ``HeadlessActionAudit`` middleware *before* the call runs. Ids,
+    # classes, a hash and a length; never the input or the result.
+
+    def _action_table(self):
+        """The table through the process's cached DynamoDB resource.
+
+        ``record_action`` sits before a call that is about to run (and, on one
+        attended resume, before the first token), so it never builds a client.
+        """
+        from apis.shared.aws_clients import get_dynamodb_table
+
+        if not self._table_name:
+            raise RuntimeError(
+                "DYNAMODB_SESSIONS_METADATA_TABLE_NAME is required for the action audit"
+            )
+        return get_dynamodb_table(self._table_name, self._region)
+
+    def record_action(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        session_id: str,
+        tool_use_id: str,
+        trigger: str,
+        tool_name: str,
+        call_class: str,
+        why: str,
+        approval: str,
+        tool_input: Any = None,
+        schedule_id: Optional[str] = None,
+        tool_id: Optional[str] = None,
+        server_name: Optional[str] = None,
+        approved_via: Optional[str] = None,
+        approving_run_id: Optional[str] = None,
+    ) -> str:
+        """Write the call's row before it runs; ``"recorded"``, or ``"replayed"`` for a row that exists.
+
+        Keyed on the run and the tool use, and conditional on the row not existing,
+        so an MCP form's replay of the same call, or a resume of it, adds a round to
+        the one row instead of a second row. Raises on any other failure: the
+        caller must not run the call it could not record.
+        """
+        from botocore.exceptions import ClientError
+
+        now = _now_iso()
+        text = canonical_input(tool_input)
+        key = action_key(user_id, run_id, tool_use_id)
+        item: dict[str, Any] = {
+            **key,
+            "GSI_PK": action_partition(user_id, schedule_id),
+            "GSI_SK": now,
+            "runId": run_id,
+            "sessionId": session_id,
+            "toolUseId": tool_use_id,
+            "trigger": trigger,
+            "toolName": tool_name,
+            "class": call_class,
+            "why": why,
+            "approval": approval,
+            "inputSha256": hashlib.sha256(text.encode()).hexdigest(),
+            "inputChars": len(text),
+            "outcome": "started",
+            "startedAt": now,
+            "rounds": 1,
+            "ttl": int(datetime.now(timezone.utc).timestamp()) + ACTION_TTL_SECONDS,
+        }
+        for name, value in (
+            ("scheduleId", schedule_id),
+            ("toolId", tool_id),
+            ("serverName", server_name),
+            ("approvedVia", approved_via),
+            ("approvingRunId", approving_run_id),
+        ):
+            if value:
+                item[name] = value
+        table = self._action_table()
+        try:
+            table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+            return "recorded"
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+        # The same call again (a form's replay, a resume): one more round on its row.
+        # An approval this pass carries is kept; an earlier one is never undone.
+        sets = ["outcome = :started"]
+        values: dict[str, Any] = {":one": 1, ":started": "started"}
+        if approval == "approved":
+            sets.append("approval = :ap")
+            values[":ap"] = approval
+            if approved_via:
+                sets.append("approvedVia = :via")
+                values[":via"] = approved_via
+            if approving_run_id:
+                sets.append("approvingRunId = :arid")
+                values[":arid"] = approving_run_id
+        table.update_item(
+            Key=key,
+            UpdateExpression="SET " + ", ".join(sets) + " ADD #rounds :one",
+            ExpressionAttributeNames={"#rounds": "rounds"},
+            ExpressionAttributeValues=values,
+        )
+        return "replayed"
+
+    def finish_action(self, *, user_id: str, run_id: str, tool_use_id: str, outcome: str) -> None:
+        """The call's outcome, after it ran. The caller treats a failure as best-effort.
+
+        A lost update leaves ``outcome: started``, which reads as "may have run",
+        never as "didn't". Writes only over a row that exists.
+        """
+        self._action_table().update_item(
+            Key=action_key(user_id, run_id, tool_use_id),
+            UpdateExpression="SET outcome = :o, finishedAt = :f",
+            ConditionExpression="attribute_exists(PK)",
+            ExpressionAttributeValues={":o": outcome, ":f": _now_iso()},
+        )
+
     def get(self, *, user_id: str, run_id: str) -> Optional[dict[str, Any]]:
         """The caller's own run record, or ``None``.
 
@@ -158,6 +281,37 @@ class RunAuditRecorder:
             Key={"PK": f"USER#{user_id}", "SK": f"RUN#{run_id}"}
         )
         return response.get("Item")
+
+
+#: How long an action row is kept (proactive-trust §12 Q8): ``apis/shared/audit``'s retention.
+ACTION_TTL_SECONDS = 365 * 24 * 60 * 60
+#: The listing partition of a run that no schedule started (Run now).
+RUN_NOW_PARTITION = "run_now"
+
+
+def action_key(user_id: str, run_id: str, tool_use_id: str) -> dict[str, str]:
+    return {"PK": f"USER#{user_id}", "SK": f"RUNACT#{run_id}#{tool_use_id}"}
+
+
+def action_partition(user_id: str, schedule_id: Optional[str]) -> str:
+    """The ``SessionLookupIndex`` partition a schedule's actions are listed from.
+
+    The user is in it, so one user's listing can never read another's rows through a
+    missing filter, and Run now's rows don't share one partition across all users.
+    """
+    return f"RUNACTS#{user_id}#{schedule_id or RUN_NOW_PARTITION}"
+
+
+def canonical_input(value: Any) -> str:
+    """A call's input as stable JSON text: what ``inputSha256`` and ``inputChars`` describe."""
+    import json
+
+    if value is None:
+        return ""
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _dynamo_safe(value: Any) -> Any:

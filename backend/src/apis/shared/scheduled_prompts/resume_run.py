@@ -131,6 +131,7 @@ async def _record_history(
         expires_at=expires_at,
         prompt_count=prompt_count,
         cost_usd=result.cost_usd,
+        write_count=result.write_count,
     )
 
 
@@ -184,6 +185,7 @@ async def _finish_watch(
             previous.seen if previous is not None else [],
             run_id=result.run_id,
             label=schedule.label,
+            write_count=result.write_count,
         )
         saved = await asyncio.to_thread(
             save_watch_state,

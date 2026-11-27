@@ -15,7 +15,7 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Iterable, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -1296,6 +1296,76 @@ def _attach_watch_probe_recorder(
     recorder = WatchProbeRecorder()
     recorder.register(strands_agent)
     return recorder
+
+
+def _unattended_run(
+    input_data: InvocationRequest, snapshot: Any, *, is_resume: bool, user_id: str
+) -> Optional["UnattendedRun"]:
+    """The unattended run this request belongs to, for the action audit (proactive-trust §7.2), or None.
+
+    Only the harness sends ``run_id`` and ``run_trigger``, and only on a headless session.
+    A resume takes the run from the paused run's snapshot, whoever answers it, so an
+    approval answered in the conversation lands on the run's rows with ``approvedVia:
+    conversation``; the worker's resume (``run_trigger: inbox_respond``) is ``inbox``. A
+    user's own follow-up turn carries neither and is not audited. While
+    ``HEADLESS_ACTION_AUDIT_ENABLED`` is off, nothing is. No I/O.
+    """
+    from apis.shared.feature_flags import headless_action_audit_enabled
+    from apis.shared.scheduled_prompts.models import is_headless_session
+
+    if not headless_action_audit_enabled() or not is_headless_session(input_data.session_id):
+        return None
+    from agents.main_agent.core.action_audit import UnattendedRun, approved_tool_use_ids
+
+    snapshot_run_id = getattr(snapshot, "run_id", None) if is_resume else None
+    if snapshot_run_id:
+        run_id = snapshot_run_id
+        trigger = getattr(snapshot, "run_trigger", None) or input_data.run_trigger or "schedule"
+        schedule_id = getattr(snapshot, "run_schedule_id", None)
+        act_without_asking = tuple(getattr(snapshot, "act_without_asking", None) or ())
+    elif input_data.run_id and input_data.run_trigger:
+        run_id = input_data.run_id
+        trigger = input_data.run_trigger
+        schedule_id = input_data.run_schedule_id
+        act_without_asking = tuple(input_data.act_without_asking or ())
+    else:
+        return None
+    approved_via = None
+    approving_run_id = None
+    if is_resume:
+        approved_via = "inbox" if input_data.run_trigger == "inbox_respond" else "conversation"
+        approving_run_id = input_data.run_id if approved_via == "inbox" else None
+    return UnattendedRun(
+        run_id=run_id,
+        user_id=user_id,
+        session_id=input_data.session_id,
+        trigger=trigger,
+        schedule_id=schedule_id,
+        approved=approved_tool_use_ids(input_data.interrupt_responses) if is_resume else frozenset(),
+        approved_via=approved_via,
+        approving_run_id=approving_run_id,
+        act_without_asking=act_without_asking,
+    )
+
+
+def _attach_watch_write_gate(agent: Any, run_request: InvocationRequest, act_without_asking: Iterable[str]) -> bool:
+    """Register the watch-run write gate (proactive-trust §7.5) on a watch run's agent. Returns whether it did.
+
+    Only where ``report`` is built (:func:`_is_watch_run`, ``PROACTIVE_RUNS_ENABLED``),
+    on the first leg and on a resume alike (``run_request`` is the resume's request in
+    the paused turn's shape), so a later write in the resumed run is gated too. A watch
+    run's agent is never cached, so the hook dies with the run. No I/O.
+    """
+    if not _is_watch_run(run_request):
+        return False
+    strands_agent = getattr(agent, "agent", None)
+    facts = getattr(agent, "tool_facts", None)
+    if strands_agent is None or not callable(facts):
+        return False
+    from agents.main_agent.session.hooks.watch_write_gate import WatchWriteGate
+
+    WatchWriteGate(facts, act_without_asking).register(strands_agent)
+    return True
 
 
 def _is_done_frame(frame: Any) -> bool:
@@ -7824,6 +7894,23 @@ async def _run_invocation(
                 {FRAME_HEIGHT_STATE_KEY: input_data.browser_frame_height}
                 if input_data.browser_frame_height is not None
                 else None
+            )
+            # The unattended run, for the action audit's middleware and the pause's
+            # snapshot (proactive-trust §7.2). Per request, never on the agent.
+            unattended_run = _unattended_run(
+                input_data, snapshot if is_resume else None, is_resume=is_resume, user_id=user_id
+            )
+            if unattended_run is not None:
+                from agents.main_agent.core.action_audit import RUN_STATE_KEY
+
+                turn_invocation_state = {**(turn_invocation_state or {}), RUN_STATE_KEY: unattended_run}
+            # A watch run asks before a write-class call unless the schedule exempts it (§7.5).
+            _attach_watch_write_gate(
+                agent,
+                _resume_request(input_data, snapshot) if is_resume else input_data,
+                (unattended_run.act_without_asking if unattended_run is not None else None)
+                or (getattr(snapshot, "act_without_asking", None) if is_resume else input_data.act_without_asking)
+                or (),
             )
 
             # A full watch run's probe (quiet-watcher triage §3.1), streamed once, just

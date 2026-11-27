@@ -247,6 +247,7 @@ async def create_scheduled_prompt(
     mode: ScheduleMode = "standard",
     model_id: Optional[str] = None,
     max_cost_per_day: Optional[Decimal] = None,
+    act_without_asking: Optional[List[str]] = None,
 ) -> ScheduledPrompt:
     """Create an active scheduled prompt, due at the next occurrence of its cadence.
 
@@ -296,6 +297,7 @@ async def create_scheduled_prompt(
         mode=mode,
         model_id=model_id,
         max_cost_per_day=max_cost_per_day,
+        act_without_asking=act_without_asking or None,
         created_at=now,
         updated_at=now,
     )
@@ -601,6 +603,7 @@ async def update_scheduled_prompt(
     mode: Optional[ScheduleMode] = None,
     model_id: Union[str, None, _Unset] = UNSET,
     max_cost_per_day: Union[Decimal, None, _Unset] = UNSET,
+    act_without_asking: Union[List[str], None, _Unset] = UNSET,
 ) -> Optional[ScheduledPrompt]:
     """Edit a schedule's fields in place.
 
@@ -721,6 +724,8 @@ async def update_scheduled_prompt(
         ("enabledTools", enabled_tools),
         ("modelId", model_id),
         ("maxCostPerDay", max_cost_per_day),
+        # An empty list clears it, like None: a watch run then asks before every write.
+        ("actWithoutAsking", (act_without_asking or None) if isinstance(act_without_asking, list) else act_without_asking),
     ):
         if isinstance(value, _Unset):
             continue

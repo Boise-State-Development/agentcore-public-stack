@@ -12,6 +12,7 @@ from apis.shared.scheduled_prompts.models import (
     ScheduledPromptState,
     ScheduleMode,
 )
+from apis.shared.scheduled_prompts.actions import ScheduleAction
 from apis.shared.scheduled_prompts.runs import ScheduleRun
 from apis.shared.scheduled_prompts.service import MIN_INTERVAL_MINUTES, interval_to_minutes
 from apis.shared.scheduled_prompts.watch_state import WatchState
@@ -19,6 +20,8 @@ from apis.shared.scheduled_prompts.watch_state import WatchState
 _MAX_PROMPT_CHARS = 20_000
 #: The largest daily budget a schedule may set, USD: a typo guard, not a policy.
 MAX_BUDGET_USD = Decimal("1000")
+#: The most tools a watch schedule may let run without asking (proactive-trust §7.5).
+MAX_ACT_WITHOUT_ASKING = 20
 
 
 class CreateScheduleRequest(BaseModel):
@@ -105,6 +108,11 @@ class CreatePersonalScheduleRequest(CreateScheduleRequest):
     #: USD a day (docs/specs/proactive-trust.md §4.2). Left out, an interval under 60
     #: minutes gets ``SCHEDULE_DEFAULT_MAX_COST_PER_DAY``; an explicit null there is a 422.
     max_cost_per_day: Optional[Decimal] = Field(None, alias="maxCostPerDay", gt=0, le=MAX_BUDGET_USD)
+    #: Tools a watch run may use without asking first (proactive-trust §7.5):
+    #: ``{catalogId}/{toolName}`` entries, at most 20, each a tool the caller may use.
+    act_without_asking: Optional[List[str]] = Field(
+        None, alias="actWithoutAsking", max_length=MAX_ACT_WITHOUT_ASKING
+    )
 
 
 class UpdatePersonalScheduleRequest(UpdateScheduleRequest):
@@ -116,6 +124,10 @@ class UpdatePersonalScheduleRequest(UpdateScheduleRequest):
     #: A number sets the budget and an explicit null clears it, refused (422) on an
     #: interval under 60 minutes; left out, the budget is unchanged.
     max_cost_per_day: Optional[Decimal] = Field(None, alias="maxCostPerDay", gt=0, le=MAX_BUDGET_USD)
+    #: Replaces the list; ``[]`` or an explicit null clears it. Left out, unchanged.
+    act_without_asking: Optional[List[str]] = Field(
+        None, alias="actWithoutAsking", max_length=MAX_ACT_WITHOUT_ASKING
+    )
 
     @model_validator(mode="after")
     def _clear_model_excludes_model(self) -> "UpdatePersonalScheduleRequest":
@@ -165,6 +177,9 @@ class ScheduledPromptResponse(BaseModel):
         None, alias="budgetHoldUntil", description="Held for its spent budget until this local midnight"
     )
     budget_days_at_limit: int = Field(0, alias="budgetDaysAtLimit")
+    act_without_asking: Optional[List[str]] = Field(
+        None, alias="actWithoutAsking", description="Tools a watch run may use without asking first"
+    )
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
 
@@ -201,6 +216,7 @@ class ScheduledPromptResponse(BaseModel):
             spend_today_date=schedule.spend_today_date,
             budget_hold_until=schedule.budget_hold_until,
             budget_days_at_limit=schedule.budget_days_at_limit,
+            act_without_asking=schedule.act_without_asking,
             created_at=schedule.created_at,
             updated_at=schedule.updated_at,
         )
@@ -220,6 +236,14 @@ class ScheduleRunsResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     runs: List[ScheduleRun] = Field(default_factory=list)
+
+
+class ScheduleActionsResponse(BaseModel):
+    """A personal schedule's audited calls, newest first (proactive-trust §7.4)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    actions: List[ScheduleAction] = Field(default_factory=list)
 
 
 class WatchStateResponse(BaseModel):

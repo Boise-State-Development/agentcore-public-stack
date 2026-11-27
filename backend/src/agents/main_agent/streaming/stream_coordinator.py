@@ -387,6 +387,20 @@ def reset_stale_interrupt_state(agent: Any, prompt: Any) -> None:
         )
 
 
+def _mark_audited(event: Dict[str, Any], invocation_state: Dict[str, Any]) -> None:
+    """Add ``audited`` to an audited call's ``tool_result`` event data, in place. No I/O."""
+    from agents.main_agent.core.action_audit import audited_class
+
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return
+    result = data.get("tool_result")
+    tool_use_id = result.get("toolUseId") if isinstance(result, dict) else None
+    call_class = audited_class(invocation_state, str(tool_use_id or ""))
+    if call_class:
+        data["audited"] = call_class
+
+
 class StreamCoordinator:
     """Coordinates streaming lifecycle for agent responses"""
 
@@ -1070,6 +1084,7 @@ class StreamCoordinator:
                         session_id=session_id,
                         user_id=user_id,
                         main_agent_wrapper=main_agent_wrapper,
+                        invocation_state=invocation_state,
                     )
                     for sse in await self._extract_oauth_required_events(
                         agent,
@@ -1637,6 +1652,13 @@ class StreamCoordinator:
                     session_id, user_id
                 ):
                     yield extraction_sse
+
+                # The action audit (proactive-trust §7.3): an audited call's
+                # `tool_result` frame says so, for the harness's write count. The
+                # SPA, the TUI and the iOS app ignore the field. A dictionary
+                # lookup, and only on an unattended run's frames.
+                if event.get("type") == "tool_result" and invocation_state:
+                    _mark_audited(event, invocation_state)
 
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
@@ -2660,6 +2682,7 @@ class StreamCoordinator:
         session_id: Optional[str],
         user_id: Optional[str],
         main_agent_wrapper: Any,
+        invocation_state: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Persist a ``PausedTurnSnapshot`` capturing the agent's construction
         params so a resume after refresh / cache eviction rebuilds the same
@@ -2694,6 +2717,11 @@ class StreamCoordinator:
         if not snapshot_source:
             return
 
+        # The unattended run this turn belongs to (proactive-trust §7.2), from the
+        # request's own state, never the agent's: a cached agent serves many runs.
+        from agents.main_agent.core.action_audit import run_from_state
+
+        unattended = run_from_state(invocation_state)
         try:
             now = datetime.now(timezone.utc)
             inference_params = snapshot_source.get("inference_params") or {}
@@ -2719,6 +2747,10 @@ class StreamCoordinator:
                 text_only_model=snapshot_source.get("text_only_model"),
                 run_mode=snapshot_source.get("run_mode"),
                 project_id=snapshot_source.get("project_id"),
+                run_id=unattended.run_id if unattended else None,
+                run_trigger=unattended.trigger if unattended else None,
+                run_schedule_id=unattended.schedule_id if unattended else None,
+                act_without_asking=list(unattended.act_without_asking) if unattended and unattended.act_without_asking else None,
                 captured_at=now.isoformat(),
                 expires_at=(now + paused_turn_ttl(session_id)).isoformat(),
             )

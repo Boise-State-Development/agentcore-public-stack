@@ -37,6 +37,10 @@ from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX
 if TYPE_CHECKING:
     from apis.shared.scheduled_prompts.watch_triage import TriageVerdict, WatchTriageRequest
 
+
+#: The triggers whose runs are unattended: their requests carry ``run_id`` / ``run_trigger``
+#: for the Runtime's action audit (docs/specs/proactive-trust.md §7.2).
+UNATTENDED_TRIGGERS = frozenset({"schedule", "run_now", "inbox_respond"})
 logger = logging.getLogger(__name__)
 
 # Connect, write and pool timeouts for the Runtime request, as on the app-api
@@ -208,6 +212,8 @@ async def run_agent_headless(
     interrupt_responses: Optional[List[Dict[str, Any]]] = None,
     run_mode: Optional[str] = None,
     incognito: Optional[bool] = None,
+    schedule_id: Optional[str] = None,
+    act_without_asking: Optional[List[str]] = None,
     trigger: str = "manual",
     mark_unread: bool = True,
     invocations_base_url: Optional[str] = None,
@@ -246,6 +252,13 @@ async def run_agent_headless(
     sent only when given, so every other caller's payload is unchanged.
     ``mark_unread=False`` leaves the unread dot to the caller: the
     scheduled-runs worker sets it only on a watch run that notifies.
+
+    A run whose ``trigger`` is unattended (``schedule``, ``run_now``,
+    ``inbox_respond``) sends its ``run_id`` and ``run_trigger``, and a scheduled run
+    its ``schedule_id`` as ``run_schedule_id``, so the Runtime's action audit records
+    the run's calls that are not known to be read-only (docs/specs/proactive-trust.md
+    §7). ``act_without_asking`` is a watch schedule's exemption list (§7.5). Any other
+    trigger (an eval, a test) sends none of them, so its payload is unchanged.
 
     ``audit_started=True`` means the caller already wrote the start audit
     record for this ``run_id`` (via ``governance.on_run_start``) and the
@@ -319,6 +332,13 @@ async def run_agent_headless(
         payload["run_mode"] = run_mode
     if incognito is not None:
         payload["incognito"] = incognito
+    if trigger in UNATTENDED_TRIGGERS:
+        payload["run_id"] = run_id
+        payload["run_trigger"] = trigger
+        if schedule_id is not None and trigger == "schedule":
+            payload["run_schedule_id"] = schedule_id
+    if act_without_asking:
+        payload["act_without_asking"] = list(act_without_asking)
 
     acc = InvocationStreamAccumulator()
     sent_at = time.monotonic()
@@ -380,6 +400,8 @@ async def run_agent_headless(
         result.client_first_token_ms = int((first_text_at - sent_at) * 1000)
     result.turn_duration_ms = acc.turn_duration_ms
     result.cost_usd = acc.cost_usd
+    result.write_count = acc.write_count
+    result.unclassified_count = acc.unclassified_count
     result.quota_exceeded = acc.quota_exceeded
     result.watch_probe = acc.watch_probe
     result.first_token_ms = acc.first_token_ms

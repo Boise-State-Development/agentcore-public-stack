@@ -94,6 +94,8 @@ class ScheduleRun(BaseModel):
     cost_usd: Optional[float] = Field(None, alias="costUsd")
     #: The run's cost never arrived; the schedule's next run fills it in.
     cost_pending: bool = Field(False, alias="costPending")
+    #: Calls the action audit recorded as ``write`` (proactive-trust §7.3); a resume adds its own.
+    write_count: int = Field(0, alias="writeCount")
 
     @field_validator("cost_usd", mode="before")
     @classmethod
@@ -102,6 +104,7 @@ class ScheduleRun(BaseModel):
 
     @field_validator(
         "item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "prompt_count",
+        "write_count",
         mode="before",
     )
     @classmethod
@@ -164,6 +167,7 @@ def record_schedule_run(
     triage: Optional[Dict[str, Any]] = None,
     cost_usd: Optional[float] = None,
     cost_pending: bool = False,
+    write_count: int = 0,
 ) -> None:
     """Write one run row for a personal schedule. Never raises: a failure is logged.
 
@@ -197,6 +201,8 @@ def record_schedule_run(
             item["costUsd"] = cost
         elif cost_pending:
             item["costPending"] = True
+        if write_count:
+            item["writeCount"] = int(write_count)
         _service._get_table().put_item(Item=item)
     except Exception:
         logger.warning(
@@ -236,6 +242,7 @@ def record_schedule_run_resume(
     expires_at: Optional[str] = None,
     prompt_count: Optional[int] = None,
     cost_usd: Optional[float] = None,
+    write_count: int = 0,
 ) -> bool:
     """Record an inbox answer on the paused run's own row (answer-from-inbox §3.8).
 
@@ -270,6 +277,9 @@ def record_schedule_run_resume(
     if cost:
         adds.append("costUsd :costUsd")
         values[":costUsd"] = cost
+    if write_count:
+        adds.append("writeCount :writeCount")
+        values[":writeCount"] = int(write_count)
     update = "SET " + ", ".join(sets)
     if adds:
         update += " ADD " + ", ".join(adds)

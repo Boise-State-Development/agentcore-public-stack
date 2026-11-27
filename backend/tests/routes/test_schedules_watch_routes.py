@@ -322,6 +322,7 @@ class TestWatchRoutes:
             "triage": None,
             "costUsd": None,
             "costPending": False,
+            "writeCount": 0,
         }
         assert listing.call_args.args == (USER_ID, SCHEDULE_ID)
 

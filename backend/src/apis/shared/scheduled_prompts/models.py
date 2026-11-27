@@ -141,6 +141,12 @@ class ScheduledPrompt(BaseModel):
     budget_days_at_limit: int = Field(
         0, alias="budgetDaysAtLimit", description="Consecutive local days the budget was reached; 3 pauses it"
     )
+    # A watch run asks before every write-class call unless its tool is listed here
+    # (docs/specs/proactive-trust.md §7.5): `{catalogId}/{toolName}` entries, at most 20,
+    # one tool on one server each. Settable only while PROACTIVE_RUNS_ENABLED is on.
+    act_without_asking: Optional[List[str]] = Field(
+        None, alias="actWithoutAsking", description="Tools a watch run may use without asking first"
+    )
     #: Run rows whose cost never arrived (``costPending``), for the next run to fill in
     #: from their sessions' ``C#`` rows. Only a run after a failure pays that read.
     cost_pending_runs: int = Field(0, alias="costPendingRuns")

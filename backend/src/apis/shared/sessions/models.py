@@ -254,6 +254,30 @@ class PausedTurnSnapshot(BaseModel):
                     "the resume rebuilds `report`, so its toolConfig is the paused turn's and the "
                     "resumed run can still save its cursors. None for every other turn.",
     )
+    run_id: Optional[str] = Field(
+        default=None,
+        alias="runId",
+        description="The unattended run that paused (docs/specs/proactive-trust.md §7.2), so a "
+                    "resume, whoever answers it, writes the paused run's action rows. None for an "
+                    "interactive turn.",
+    )
+    run_trigger: Optional[str] = Field(
+        default=None,
+        alias="runTrigger",
+        description="How that run started: 'schedule', 'run_now' or 'inbox_respond'. None for an "
+                    "interactive turn.",
+    )
+    run_schedule_id: Optional[str] = Field(
+        default=None,
+        alias="runScheduleId",
+        description="The schedule that run belongs to, for its action rows' listing partition.",
+    )
+    act_without_asking: Optional[List[str]] = Field(
+        default=None,
+        alias="actWithoutAsking",
+        description="A watch run's `actWithoutAsking` (§7.5), so the resumed run's write gate is "
+                    "the paused one's.",
+    )
     project_id: Optional[str] = Field(
         default=None,
         alias="projectId",

@@ -414,6 +414,14 @@ class TestChatAgentWiring:
         monkeypatch.setattr(ChatAgent, "_build_filtered_tools", lambda self: [], raising=False)
         monkeypatch.setattr(ChatAgent, "_create_hooks", lambda self: [], raising=False)
         agent._create_agent()
+        # No offloader without a bucket. The action audit's middleware (on by default,
+        # inert on an interactive turn) is the one plugin left; with it off, none.
+        from agents.main_agent.core.action_audit import HeadlessActionAudit
+
+        assert [type(p) for p in captured["plugins"] or []] == [HeadlessActionAudit]
+        monkeypatch.setenv("HEADLESS_ACTION_AUDIT_ENABLED", "false")
+        captured.clear()
+        agent._create_agent()
         assert captured["plugins"] is None
 
 
