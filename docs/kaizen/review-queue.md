@@ -146,16 +146,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: one `UpdateAgentRuntime` on a throwaway V2 runtime with a ~3.5 KB environment settles it. The 2,560 figure came from AWS's own error message on 10-09, so the change may have landed after that.
 - **Status**: open
 
-### [2026-11-20] Move the hosted FastMCP servers to 4.2.x, and drop the tolerant multi-select branch we'd otherwise write
-- **Source**: research/2026-11-20.md ▸ Top 5 #3; https://github.com/PrefectHQ/fastmcp/releases/tag/v4.2.0 (#6361), /v4.2.1 (security), /v4.2.3
-- **Surface**: external MCP server repos; in this repo, a note in `docs/specs/mcp-elicitation.md` beside `apis/shared/mcp_elicitation/forms.py`
-- **Effort × Impact**: L × M
-- **Subtracts**: yes: a normaliser branch never written; closes the [2026-11-13] FastMCP ≤4.1.x risk
-- **Unlocks**:
-  - servers publishing skills next to their tools (`skills/list`, digest-checked `read_skill`)
-- **Notes**: 4.2 needs Python ≥ 3.11. Diff an OpenAPI-built server's error responses (4.2.3 turns a missing path argument from a 500 into a validation error).
-- **Status**: open
-
 ### [2026-11-20] Test that an approval dies when a workflow-run step is edited after review
 - **Source**: research/2026-11-20.md ▸ Top 5 #4; https://github.com/assistant-ui/assistant-ui/pull/10710; Pydantic AI `DeferredToolRequests.validated_args` (v2.71.0)
 - **Surface**: backend (`app_api/handoffs/workflow_runs.py`, `apis/shared/handoff/runs.py`) + SPA (`handoff-review-sheet.component.ts`)
@@ -214,13 +204,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Surface**: docs
 - **Effort × Impact**: L × L
 - **Notes**: "without one, a child inherits the parent's model and tools" → "…the parent's model and tools (including a plugin-added tool), but not its hooks or plugins (#6281), so our async builder must register our own hooks"
-- **Status**: open
-
-### [2026-11-20] Spec sync: workflow-runs.md §0 Status (W.2–W.4a built too)
-- **Source**: research/2026-11-20.md ▸ Spec sync row 7
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Notes**: "PR-W.1 (the run row, its routes and the flag) built 2026-11-20." → "PR-W.1 to W.4a built 2026-11-20 (#2189, #2195, #2193, #2194); W.4b and W.4c open."
 - **Status**: open
 
 ### [2026-11-20] Spec sync: workflow-runs.md §12 (the handoffs spec is edited per step)
@@ -1226,6 +1209,29 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-11-20] Move the hosted FastMCP servers to 4.2.x, and drop the tolerant multi-select branch we'd otherwise write → RESOLVED — **SUPERSEDED**
+- **Decision**: replaced by [2026-11-27] "Re-target the hosted FastMCP servers at exactly 4.2.6, with listen streams off".
+- **Reasoning**: 4.2.5 turned listen streams on by default and 4.2.4 carries an OAuth-proxy security fix, so the target moved from "4.2.x" to exactly 4.2.6 with `FASTMCP_ENABLE_SUBSCRIPTIONS_LISTEN=false`. The research doc (2026-11-27 ▸ FastMCP) asked to close this one.
+- **Reviewed in**: reviews/2026-11-27.md (outcome checked on disk; no decision needed)
+- **Source**: research/2026-11-20.md ▸ Top 5 #3; https://github.com/PrefectHQ/fastmcp/releases/tag/v4.2.0 (#6361), /v4.2.1 (security), /v4.2.3
+- **Surface**: external MCP server repos; in this repo, a note in `docs/specs/mcp-elicitation.md` beside `apis/shared/mcp_elicitation/forms.py`
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: a normaliser branch never written; closes the [2026-11-13] FastMCP ≤4.1.x risk
+- **Unlocks**:
+  - servers publishing skills next to their tools (`skills/list`, digest-checked `read_skill`)
+- **Notes**: 4.2 needs Python ≥ 3.11. Diff an OpenAPI-built server's error responses (4.2.3 turns a missing path argument from a 500 into a validation error).
+- **Status**: resolved 2026-11-27
+
+### [2026-11-20] Spec sync: workflow-runs.md §0 Status (W.2–W.4a built too) → RESOLVED — **SHIPPED**
+- **Decision**: fixed on disk: `docs/specs/workflow-runs.md:3` now names step 1 and step 2 as built and dev-validated.
+- **Reasoning**: research/2026-11-27.md ▸ Spec sync asked to close it.
+- **Reviewed in**: reviews/2026-11-27.md (outcome checked on disk; no decision needed)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 7
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "PR-W.1 (the run row, its routes and the flag) built 2026-11-20." → "PR-W.1 to W.4a built 2026-11-20 (#2189, #2195, #2193, #2194); W.4b and W.4c open."
+- **Status**: resolved 2026-11-27
 
 ### [2026-09-16] Compaction v2 (#835) go/no-go — re-evaluate once the model-relative stack has a week of data → RESOLVED — **DECLINED**
 - **Decision**: decisions.md ▸ [2026-10-09] Declined as scoped — compaction v2's frozen-segment engine.
