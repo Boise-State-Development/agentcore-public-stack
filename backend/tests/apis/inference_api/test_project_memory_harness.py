@@ -257,6 +257,27 @@ def test_prose_is_rejected_with_the_item_rule(projects, runtime):
     assert result["status"] == "error" and _text(result).startswith("❌ Not saved:")
 
 
+def test_a_long_description_is_refused_with_what_to_send_instead(projects, runtime):
+    """Production, 28 days to 2026-11-27: this refusal was most of memory_save's failures."""
+    from apis.shared.memory.format import MAX_DESCRIPTION_CHARS
+
+    project = _team(projects)
+    tools = _tools(project, EDITOR)
+    long = "Status checks: " + "reply with one sentence. " * 10
+    result = _call(tools["memory_save"], scope="project", slug="status", text=ITEMS, description=long)
+    assert result["status"] == "error"
+    text = _text(result)
+    assert f"the limit is {MAX_DESCRIPTION_CHARS}" in text
+    assert f"`description` cut to one line of {MAX_DESCRIPTION_CHARS} characters or fewer" in text
+    # Nothing was written, so the same call with a description that fits creates the file.
+    again = _call(tools["memory_save"], scope="project", slug="status", text=ITEMS, description=long[:MAX_DESCRIPTION_CHARS])
+    assert again["status"] == "success" and "version 1" in _text(again)
+
+    proposed = _call(_tools(project, VIEWER)["memory_propose"], slug="status-2", text=ITEMS, description=long)
+    assert proposed["status"] == "error"
+    assert f"{MAX_DESCRIPTION_CHARS} characters or fewer" in _text(proposed)
+
+
 def test_an_archived_project_says_archived_not_editor_required(projects, runtime):
     project = _team(projects)
     _call(_tools(project, EDITOR)["memory_save"], scope="mine", slug="drafts", text=ITEMS, description="")
