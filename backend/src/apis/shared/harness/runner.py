@@ -23,7 +23,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -33,6 +33,9 @@ from apis.shared.harness.governance import GovernanceFloor
 from apis.shared.harness.models import RunResult
 from apis.shared.harness.sse import InvocationStreamAccumulator, iter_sse_events
 from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX
+
+if TYPE_CHECKING:
+    from apis.shared.scheduled_prompts.watch_triage import TriageVerdict, WatchTriageRequest
 
 logger = logging.getLogger(__name__)
 
@@ -451,3 +454,73 @@ async def run_agent_headless(
     # F6a checkpoint 4 — outcome audit (best-effort inside).
     await governance.on_run_end(result=result)
     return result
+
+
+#: A triage replays at most five read-only calls (10 s each) after a possibly cold microVM and
+#: the probe's MCP pre-flight; past this the worker stops waiting and escalates.
+WATCH_TRIAGE_MAX_DURATION_SECONDS = 120.0
+
+
+async def run_watch_triage(
+    *,
+    user_id: str,
+    session_id: str,
+    request: "WatchTriageRequest",
+    auth: BearerAuthStrategy,
+    rag_assistant_id: Optional[str] = None,
+    enabled_tools: Optional[List[str]] = None,
+    invocations_base_url: Optional[str] = None,
+    max_duration_seconds: float = WATCH_TRIAGE_MAX_DURATION_SECONDS,
+) -> "Tuple[TriageVerdict, int]":
+    """Ask the Runtime to triage a watcher's run (quiet-watcher triage §4.1): the verdict and its ms.
+
+    Sent as ``user_id`` with the same bearer and the same Runtime session as the full run that
+    follows (``session_id`` is that run's), with the run's tool selection fields, so the triage
+    replays through the tools the full run would carry, on the microVM it will run on. Writes no
+    audit row and spends no model call. Never raises except ``HeadlessAuthError`` (a run that
+    can't authenticate must not execute, here as for the full run): every other failure, and a
+    stream with no readable ``watch_triage_result``, is an escalation (``triage_failed``).
+    """
+    from apis.shared.scheduled_prompts.watch_triage import (
+        TRIAGE_FAILED,
+        WATCH_TRIAGE_EVENT,
+        escalate,
+        verdict_from_frame,
+    )
+
+    started = time.monotonic()
+    bearer = await auth.mint_bearer_for_user(user_id)
+    base_url = invocations_base_url or os.environ.get("INFERENCE_API_URL", "http://localhost:8001")
+    payload: Dict[str, Any] = {
+        "session_id": session_id,
+        "watch_triage": request.model_dump(by_alias=True),
+    }
+    if rag_assistant_id is not None:
+        payload["rag_assistant_id"] = rag_assistant_id
+    if enabled_tools is not None:
+        payload["enabled_tools"] = enabled_tools
+
+    frame: Optional[Dict[str, Any]] = None
+    try:
+        async with asyncio.timeout(max_duration_seconds), _build_http_client(max_duration_seconds) as client:
+            async with client.stream(
+                "POST",
+                build_invocations_url(base_url),
+                headers=apply_runtime_session_header(
+                    {"Content-Type": "application/json", "Authorization": f"Bearer {bearer}"},
+                    session_id,
+                    user_id,
+                ),
+                json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    logger.warning("Watch triage for %s: HTTP %s", request.schedule_id, response.status_code)
+                else:
+                    async for name, data in iter_sse_events(response.aiter_lines()):
+                        if name == WATCH_TRIAGE_EVENT:
+                            frame = data
+    except (httpx.HTTPError, TimeoutError) as exc:
+        logger.warning("Watch triage for %s did not finish: %s", request.schedule_id, type(exc).__name__)
+    ms = int((time.monotonic() - started) * 1000)
+    verdict = verdict_from_frame(frame) if frame is not None else escalate(TRIAGE_FAILED)
+    return verdict, ms

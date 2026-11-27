@@ -58,6 +58,13 @@ While ``WATCH_TRIAGE_ENABLED`` is on, that same write also stores what the run
 leaves for the triage stage (docs/specs/quiet-watcher-triage.md §3.4): its
 probe (from the ``watch_probe`` frame and the tool trace), ``lastFullRunAt``
 and ``wakeAt``. The run's outcome is the same either way.
+While it is on, each watch run is also **triaged in shadow** first (triage §6.5,
+PR T.2): unless §2.4 says to skip (no probe, a stale version, ``wakeAt`` due, or
+the last full run older than the staleness floor), the worker asks the Runtime
+to replay the stored probe (``run_watch_triage``, on the run's own session id),
+records the verdict on the run's ``SCHEDRUN#`` row as ``triage``, and then runs
+the full run **regardless**. A failed triage is an escalation, never a failed
+run.
 A standard schedule, or any schedule while the flag is off, runs as before.
 
 A run that paused on the user (``needs_user``: a tool approval, a question, a
@@ -80,6 +87,7 @@ watcher's state with ``finish_resumed_run``. The answers are never logged.
 """
 
 import asyncio
+import contextvars
 import logging
 import os
 import uuid
@@ -93,11 +101,12 @@ from apis.shared.harness import (
     RunAuditRecorder,
     RunResult,
     run_agent_headless,
+    run_watch_triage,
 )
 from apis.shared.feature_flags import proactive_runs_enabled, watch_triage_enabled
 from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
-from apis.shared.scheduled_prompts.models import ScheduledPrompt
+from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX, ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.needs_user import (
     INBOX_RESUME_KIND,
@@ -108,6 +117,13 @@ from apis.shared.scheduled_prompts.needs_user import (
 from apis.shared.scheduled_prompts.resume_run import finish_resumed_run
 from apis.shared.scheduled_prompts.runs import ScheduleRunStatus, record_schedule_run
 from apis.shared.scheduled_prompts.watch_probe import FullRunTriage, full_run_triage
+from apis.shared.scheduled_prompts.watch_triage import (
+    TRIAGE_FAILED,
+    escalate,
+    history_triage,
+    skip_reason,
+    triage_request_from_state,
+)
 from apis.shared.scheduled_prompts.watch_run import (
     WatchOutcome,
     build_watch_prompt,
@@ -128,6 +144,12 @@ from apis.shared.scheduled_prompts.service import (
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+#: The shadow triage of the run being handled (triage §6.5), which every history row it writes
+#: carries as ``triage``. Set once per ``run_schedule``; ``None`` when no triage applied.
+_RUN_TRIAGE: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar(
+    "watch_run_triage", default=None
+)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -176,6 +198,7 @@ async def _record_history(
         usage=result.usage if result is not None else None,
         expires_at=expires_at,
         prompt_count=prompt_count,
+        triage=_RUN_TRIAGE.get(),
     )
 
 
@@ -358,6 +381,9 @@ async def _finish_watch_run(
         await _record_history(schedule, "notify", result, item_count=len(outcome.items))
         await _save_watch_state(schedule, previous, outcome, result.finished_at, triage)
         logger.info(f"Schedule {schedule_id}: watch run {result.run_id} notified {len(outcome.items)} item(s)")
+        if (_RUN_TRIAGE.get() or {}).get("verdict") == "quiet":
+            # The shadow's one failure (triage §6.5): read each by hand; no content is logged.
+            logger.warning(f"Schedule {schedule_id}: shadow miss, triage said quiet and run {result.run_id} notified")
         return {
             "scheduleId": schedule_id,
             "result": "notify",
@@ -507,10 +533,50 @@ async def _finish_needs_user_run(
     }
 
 
+async def _shadow_triage(
+    schedule: ScheduledPrompt, state: Optional[WatchState], session_id: str
+) -> Optional[Dict[str, Any]]:
+    """What tier 1 would have done for this run (triage §6.5), for its history row, or ``None``.
+
+    ``None`` while ``WATCH_TRIAGE_ENABLED`` is off. A run §2.4 skips records why and sends no
+    invocation. Changes no outcome: the full run follows whatever this returns. Never raises
+    but ``HeadlessAuthError``, which the full run would meet too.
+    """
+    if not watch_triage_enabled():
+        return None
+    skipped = skip_reason(state, datetime.now(timezone.utc))
+    if skipped is not None:
+        logger.info(f"Schedule {schedule.schedule_id}: no triage ({skipped})")
+        return history_triage(None, ms=0, skipped=skipped)
+    request = triage_request_from_state(schedule.schedule_id, state)
+    if request is None:
+        return history_triage(escalate(TRIAGE_FAILED), ms=0)
+    try:
+        verdict, ms = await run_watch_triage(
+            user_id=schedule.user_id,
+            session_id=session_id,
+            request=request,
+            auth=CognitoRefreshBearerAuth(),
+            rag_assistant_id=schedule.assistant_id,
+            enabled_tools=schedule.enabled_tools,
+        )
+    except HeadlessAuthError:
+        raise
+    except Exception:
+        logger.warning(f"Schedule {schedule.schedule_id}: triage failed", exc_info=True)
+        verdict, ms = escalate(TRIAGE_FAILED), 0
+    logger.info(
+        f"Schedule {schedule.schedule_id}: shadow triage {verdict.verdict} ({verdict.reason}) in {ms} ms"
+    )
+    return history_triage(verdict, ms=ms)
+
+
 async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     schedule_id = payload["scheduleId"]
     user_id = payload["userId"]
 
+    # A worker that handles several runs in one context must not carry one's triage to the next.
+    _RUN_TRIAGE.set(None)
     schedule = await get_scheduled_prompt(user_id, schedule_id)
     if schedule is None:
         logger.info(f"Scheduled-runs worker: schedule {schedule_id} no longer exists; dropping run")
@@ -538,6 +604,9 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
                 logger.info(f"Schedule {schedule_id}: holding while an earlier run waits on the user")
                 return {"scheduleId": schedule_id, "result": "held"}
             prompt = build_watch_prompt(schedule.prompt_text, watch_state)
+            # The triage and the full run share one session, so they land on one microVM (§4.1).
+            run_config["session_id"] = f"{HEADLESS_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
+            _RUN_TRIAGE.set(await _shadow_triage(schedule, watch_state, run_config["session_id"]))
         result: RunResult = await run_agent_headless(
             user_id=user_id,
             prompt=prompt,

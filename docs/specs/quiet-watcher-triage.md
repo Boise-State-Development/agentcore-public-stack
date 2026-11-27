@@ -1,6 +1,6 @@
 # Quiet Watcher — The Second Triage Stage
 
-**Status:** Design. PR T.1 (record the probe) is built behind `WATCH_TRIAGE_ENABLED`; see §8.1. Nothing past it is built.
+**Status:** Design. PR T.1 (record the probe, §8.1) and PR T.2 (tier 1 in shadow, §8.2) are built behind `WATCH_TRIAGE_ENABLED`. Nothing past them is built.
 **Date:** 2026-11-25
 **Targets branch:** `develop`
 **Parent:** `docs/specs/quiet-watcher.md` (slice 1). This is the "second triage stage" its §5 dev-readout row and its §6 readout leave open. Gap context: `docs/specs/proactive-agent-gaps.md` G2 ("Triage split") and §3's target of under $0.001 per quiet run.
@@ -466,6 +466,23 @@ So the PR plan (§8) builds tier 1 and the shadow first. **Tier 2 is built only 
 - **A run whose probe can't be read leaves none.** The old baseline is removed rather than outliving the full run that replaced it, and `lastFullRunAt` still moves.
 - **`report` spec growth, measured on dev** with `scripts/measure_tool_spec_tokens.py`'s CountTokens helper against Haiku 4.5: 364 → 416 tokens (+52), 1,303 → 1,497 characters. Haiku 5.5 refuses CountTokens.
 - **The coverage corpus's first slice** has 6 prompts (one per source shape) and 39 variants, all synthetic.
+
+### 8.2 T.2 as built
+
+- **Where the tools come from.** The Runtime resolves them through the turn's own phases: `resolve_turn_agent` (with no use recorded) for an Agent watcher, then `_resolve_effective_tools`, then `_build_turn_tools`. A fresh headless session holds no files, so no attachment auto-enable or document tool applies, as on the run's first turn. An Agent the caller may no longer use, or a project harness, is `probe_refused`.
+- **How the tools are loaded, with no agent.** The registry, Gateway and external MCP tools are assembled inside `BaseAgent` (`_register_external_mcp_tools`, `_build_filtered_tools`). `TurnToolSet` (`agents/main_agent/tool_set.py`) runs exactly those inherited methods and nothing else of `BaseAgent.__init__`. A Strands `ToolRegistry` then loads them as an `Agent` would (`process_tools`), and `cleanup()` releases the MCP clients. The turn path is unchanged, and a test pins every attribute those methods read, so the two can't drift.
+- **How a call is replayed.** It streams the tool the way Strands' executor does and keeps the last `ToolResultEvent`, with an empty invocation state. A tool that needs the agent's `ToolContext` raises, so its probe escalates. No such tool is in `PARALLEL_SAFE_TOOLS` today. The `ExecuteToolStage` middlewares and the `Before*` hooks don't run. That matters only for a hook that rewrites a read-only call's input: `WebSearchDefaultsHook` is the one today, and it is off everywhere. Such a hook would make the replay differ from the baseline, which escalates and is never a miss.
+- **An error result escalates, even when it matches.** A replay that raises, times out (10 s) or returns `status: "error"` is `probe_error`. §2.1 keeps an errored call in the probe, so one that errored in the full run escalates every time until a full run makes it succeed. That costs money, never recall.
+- **The worker's own outcomes.**
+  - A triage the worker couldn't invoke or read is `triage_failed`, an escalation not in §4.1's list.
+  - A run §2.4 skips records `{verdict: "skipped", reason}`, with `reason` one of `no_probe`, `version_mismatch`, `wake_due` or `stale`, so the readout can count them.
+  - Every row the run writes carries the map as `triage`, enums and a duration only.
+- **One session id.** The worker mints the run's headless id before the triage and passes it to both the triage and the full run, so the two share a microVM (§4.1).
+- **A shadow miss is logged.** A notifying full run whose triage said `quiet` logs a warning that names the schedule and the run, and no content.
+- **No `decider` field yet.** T.3 adds it to `WatchTriageRequest` with the decider.
+- **No `C#` row.** The triage makes no model call, so tier 1 costs Runtime compute and the probe's tool calls only.
+- **`WATCH_TRIAGE_MAX_STALENESS_HOURS`** is read by the worker (default 24, kept between 1 hour and 30 days). It isn't wired through CDK, so a deployment changes it on the worker's environment.
+- **The run history** gains `triage` on `ScheduleRun` and on the SPA's `ScheduleRun` type. Nothing renders it while triage runs in shadow.
 
 T.1 and T.2 can ship before anyone decides on tier 2. A deployment that never assigns a `watch_triage` model gets tier 1 alone.
 

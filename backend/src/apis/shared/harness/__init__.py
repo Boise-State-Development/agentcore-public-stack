@@ -31,7 +31,7 @@ from apis.shared.harness.models import (
     RunStatus,
     ToolTraceEntry,
 )
-from apis.shared.harness.runner import build_invocations_url, run_agent_headless
+from apis.shared.harness.runner import build_invocations_url, run_agent_headless, run_watch_triage
 
 __all__ = [
     "BearerAuthStrategy",
@@ -49,4 +49,5 @@ __all__ = [
     "ToolTraceEntry",
     "build_invocations_url",
     "run_agent_headless",
+    "run_watch_triage",
 ]
