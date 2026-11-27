@@ -610,6 +610,11 @@ class TestEndToEnd:
         assert record.user_id == "user-sub-001"
         assert record.cognito_refresh_token == "refresh.tok"
 
+        # The terminal is listed in the user's signed-in apps and terminals.
+        (pointer,) = await repository.list_device_pointers("user-sub-001")
+        assert pointer.session_id == record.session_id
+        assert pointer.kind == "terminal"
+
     def test_device_callback_sets_no_cookies(self, cli_app, monkeypatch):
         """The invariant. Cookies here would log the browser in as a side
         effect of approving a terminal, and would leave the browser and the

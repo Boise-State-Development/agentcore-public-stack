@@ -69,9 +69,12 @@ from apis.shared.sessions_bff.cookie import (
 )
 from apis.shared.sessions_bff.csrf import CSRFHelper
 from apis.shared.sessions_bff.models import (
+    DEVICE_KIND_TERMINAL,
     NATIVE_CLIENT,
     CookiePayload,
+    DevicePointer,
     SessionRecord,
+    device_id_for,
 )
 from apis.shared.sessions_bff.refresh import (
     CognitoRefreshClient,
@@ -854,7 +857,30 @@ async def _complete_device_authorization(
         )
 
     logger.info("Device authorization completed for user %s", user_id)
+    # So the user can find and sign out this terminal (`/auth/devices`).
+    config = BFFAuthConfig.from_env()
+    now = int(time.time())
+    await put_device_pointer_quietly(
+        _get_repository(config),
+        DevicePointer(
+            device_id=device_id_for(session_id),
+            session_id=session_id,
+            user_id=user_id,
+            kind=DEVICE_KIND_TERMINAL,
+            created_at=now,
+            ttl=now + config.bff_config.absolute_lifetime_seconds,
+        ),
+    )
     return device_approved_page()
+
+
+async def put_device_pointer_quietly(repository: SessionRepository, pointer: DevicePointer) -> None:
+    """Write a devices-list pointer. Never fails the sign-in it follows: a
+    session without one still works, it just isn't listed."""
+    try:
+        await repository.put_device_pointer(pointer)
+    except Exception:
+        logger.warning("Could not record a signed-in %s for the devices list", pointer.kind, exc_info=True)
 
 
 async def _complete_native_handoff(

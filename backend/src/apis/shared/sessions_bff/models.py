@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 #: `SessionRecord.client` for a session handed to a native app through
 #: `POST /auth/native/exchange` (docs/specs/native-app-auth.md D4). Browser and
 #: terminal rows leave the field unset.
 NATIVE_CLIENT = "native"
+
+#: `DevicePointer.kind` values: a native app's session, and the terminal
+#: client's (`/auth/cli/*`). Browser sessions have no pointer.
+DEVICE_KIND_NATIVE = "native"
+DEVICE_KIND_TERMINAL = "terminal"
+
+DEVICES_PK_PREFIX = "DEVICES#"
+DEVICE_SK_PREFIX = "DEVICE#"
+
+
+def device_id_for(session_id: str) -> str:
+    """The id a client sees for a session in the devices list.
+
+    Derived, never the session id itself: the list and the revoke route never
+    hand a session id back to a client, and two calls agree without storage.
+    """
+    return hashlib.sha256(f"device:{session_id}".encode("utf-8")).hexdigest()[:32]
 
 
 @dataclass
@@ -71,3 +89,55 @@ class CookiePayload:
     # lookup on obviously-stale cookies). Keep field present so the encoded
     # shape doesn't change when we add it.
     extras: dict = field(default_factory=dict)
+
+
+@dataclass
+class DevicePointer:
+    """One of a user's signed-in apps or terminals (docs/specs/native-app-auth.md D9).
+
+    A lookup path only: the session row it names decides whether the device is
+    still signed in, and when it was last used.
+    """
+
+    device_id: str
+    session_id: str
+    user_id: str
+    kind: str  # DEVICE_KIND_NATIVE or DEVICE_KIND_TERMINAL
+    created_at: int  # epoch seconds
+    ttl: int  # epoch seconds; the session's absolute lifetime
+    device_model: Optional[str] = None
+    app_version: Optional[str] = None
+
+    @classmethod
+    def for_session(
+        cls,
+        record: SessionRecord,
+        *,
+        kind: str,
+        ttl: int,
+        device_model: Optional[str] = None,
+        app_version: Optional[str] = None,
+    ) -> "DevicePointer":
+        return cls(
+            device_id=device_id_for(record.session_id),
+            session_id=record.session_id,
+            user_id=record.user_id,
+            kind=kind,
+            created_at=record.created_at,
+            ttl=ttl,
+            device_model=device_model,
+            app_version=app_version,
+        )
+
+    @classmethod
+    def from_item(cls, item: Mapping[str, Any]) -> "DevicePointer":
+        return cls(
+            device_id=str(item["device_id"]),
+            session_id=str(item["session_id"]),
+            user_id=str(item["user_id"]),
+            kind=str(item.get("kind") or DEVICE_KIND_NATIVE),
+            created_at=int(item.get("created_at") or 0),
+            ttl=int(item.get("ttl") or 0),
+            device_model=item.get("device_model"),
+            app_version=item.get("app_version"),
+        )

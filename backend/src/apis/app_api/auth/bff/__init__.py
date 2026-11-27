@@ -18,10 +18,14 @@ it can receive.
 `native_router` adds `POST /auth/native/exchange`, where a native app trades
 the handoff code the callback's native exit gave it for one of these same
 sessions (docs/specs/native-app-auth.md).
+
+`devices_router` adds `/auth/devices`, where a user lists and signs out the
+apps and terminals holding one of these sessions (native-app-auth.md D9).
 """
 
 from .cli_routes import router as cli_router
+from .devices_routes import router as devices_router
 from .native_routes import router as native_router
 from .routes import router
 
-__all__ = ["cli_router", "native_router", "router"]
+__all__ = ["cli_router", "devices_router", "native_router", "router"]

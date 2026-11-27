@@ -6,6 +6,9 @@ from typing import Optional, List
 import logging
 
 from apis.shared.auth import User, require_admin_scope
+from apis.app_api.auth.bff.devices_routes import DeviceRevokedResponse, revoke_all_devices
+from apis.shared.audit.models import TARGET_USER, AuditAction
+from apis.shared.audit.service import get_audit_service
 from apis.shared.costs.aggregator import CostAggregator
 from agents.main_agent.quota.repository import QuotaRepository
 from agents.main_agent.quota.resolver import QuotaResolver
@@ -188,3 +191,29 @@ async def get_user_detail(
             detail=f"User {user_id} not found"
         )
     return detail
+
+
+@router.delete("/{user_id}/devices", response_model=DeviceRevokedResponse, response_model_by_alias=True)
+async def revoke_user_devices(
+    user_id: str,
+    admin_user: User = Depends(require_users_admin),
+) -> DeviceRevokedResponse:
+    """Sign out every native app and terminal the user has (native-app-auth.md D9).
+
+    Their web sessions are untouched, as is their headless grant: a device whose
+    token the grant holds is signed out with the token left for scheduled runs,
+    and the answer says so. Audited as ``user.devices_revoked``.
+    """
+    result = await revoke_all_devices(user_id)
+    logger.info(
+        "Admin signed out a user's apps and terminals",
+        extra={"event": "user_devices_revoked", "revoked": result.revoked},
+    )
+    get_audit_service().record(
+        action=AuditAction.USER_DEVICES_REVOKED,
+        actor=admin_user,
+        target_id=user_id,
+        target_type=TARGET_USER,
+        after={"revoked": result.revoked, "scheduledRunsContinue": result.scheduled_runs_continue},
+    )
+    return result

@@ -361,6 +361,17 @@ class TestNativeExchange:
         assert row["device_model"] == ("iPhone17,1" + "x" * 200)[:64]
         assert row["app_version"] == "1.0 (42)"
 
+        # The phone is listed in the user's signed-in apps and terminals, with
+        # the session's lifetime and the same bounded facts.
+        (pointer,) = [
+            i for i in repository._table.scan().get("Items", []) if i["PK"] == f"DEVICES#{row['user_id']}"
+        ]
+        assert pointer["session_id"] == row["session_id"]
+        assert pointer["kind"] == "native"
+        assert int(pointer["ttl"]) == body["expires_at"]
+        assert pointer["device_model"] == row["device_model"]
+        assert pointer["app_version"] == "1.0 (42)"
+
     def test_a_spent_handoff_is_invalid_grant_and_keeps_the_session(
         self, native_app, monkeypatch, repository, validator
     ):
