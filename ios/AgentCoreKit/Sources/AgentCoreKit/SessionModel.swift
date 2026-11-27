@@ -195,6 +195,29 @@ public final class SessionModel {
         }
     }
 
+    /// The server answered a signed-in call with `401`: the session expired or
+    /// was revoked. Same outcome as finding it expired at launch.
+    public func sessionEnded() {
+        guard case .signedIn = phase, let server else { return }
+        sessionStore.delete(for: server)
+        problem = .sessionExpired
+        phase = .signedOut
+        let client = makeClient(server)
+        Task {
+            if let fetched = try? await client.signInOptions() {
+                options = fetched
+            }
+        }
+    }
+
+    /// What the signed-in screens call the server with.
+    func conversationSource() -> ConversationSource? {
+        guard let server, let sealed = sessionStore.load(for: server) else { return nil }
+        return ConversationSource(client: makeClient(server), sealed: sealed) { [weak self] in
+            self?.sessionEnded()
+        }
+    }
+
     // MARK: - Private
 
     private func restoreSession(on server: ServerConfiguration) async {

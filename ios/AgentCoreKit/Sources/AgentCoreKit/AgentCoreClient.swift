@@ -58,10 +58,78 @@ public struct AgentCoreClient: Sendable {
         _ = try await send(request(path: "auth/logout", method: "POST", session: session))
     }
 
+    /// `GET /sessions`: one page of the user's conversations, newest first.
+    /// Pass the previous page's `nextToken` as `after` for the next one.
+    public func conversations(
+        session: String,
+        limit: Int,
+        after nextToken: String? = nil
+    ) async throws(AgentCoreClientError) -> ConversationPage {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let nextToken {
+            query.append(URLQueryItem(name: "next_token", value: nextToken))
+        }
+        let (data, _) = try await send(request(path: "sessions", query: query, session: session))
+        return try decode(ConversationPage.self, from: data, keys: .useDefaultKeys)
+    }
+
+    /// `GET /sessions/{id}/messages`, every page, as the transcript shows it.
+    ///
+    /// The server pages oldest first, so the newest messages are on the last
+    /// page and a reader opening a conversation needs them all.
+    public func transcript(
+        session: String,
+        conversationId: String,
+        pageSize: Int = 200
+    ) async throws(AgentCoreClientError) -> Transcript {
+        var pages: [MessagesPage] = []
+        var nextToken: String?
+        repeat {
+            var query = [URLQueryItem(name: "limit", value: String(pageSize))]
+            if let nextToken {
+                query.append(URLQueryItem(name: "next_token", value: nextToken))
+            }
+            let path = ["sessions", conversationId, "messages"]
+            let (data, _) = try await send(request(components: path, query: query, session: session))
+            let page = try decode(MessagesPage.self, from: data, keys: .useDefaultKeys)
+            pages.append(page)
+            // A token the server already gave would loop forever.
+            if let token = page.nextToken, token == nextToken { break }
+            nextToken = page.nextToken
+        } while nextToken != nil && pages.count < Self.maxTranscriptPages
+        return Transcript(pages: pages)
+    }
+
+    /// 50 pages of 200 is far past any conversation compaction allows.
+    static let maxTranscriptPages = 50
+
     // MARK: - Plumbing
 
-    private func request(path: String, method: String = "GET", session: String? = nil) -> URLRequest {
-        var request = URLRequest(url: server.baseURL.appending(path: path))
+    private func request(
+        path: String,
+        method: String = "GET",
+        query: [URLQueryItem] = [],
+        session: String? = nil
+    ) -> URLRequest {
+        request(
+            components: path.split(separator: "/").map(String.init), method: method, query: query, session: session)
+    }
+
+    /// `components` are escaped one by one, so an id can never add a path segment.
+    private func request(
+        components: [String],
+        method: String = "GET",
+        query: [URLQueryItem] = [],
+        session: String? = nil
+    ) -> URLRequest {
+        var url = server.baseURL
+        for component in components {
+            url.append(component: component, directoryHint: .notDirectory)
+        }
+        if !query.isEmpty {
+            url.append(queryItems: query)
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let session {
@@ -92,9 +160,15 @@ public struct AgentCoreClient: Sendable {
         }
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws(AgentCoreClientError) -> T {
+    /// The auth routes answer in snake_case; the sessions routes answer in
+    /// their Pydantic aliases (camelCase), which are matched as written.
+    private func decode<T: Decodable>(
+        _ type: T.Type,
+        from data: Data,
+        keys: JSONDecoder.KeyDecodingStrategy = .convertFromSnakeCase
+    ) throws(AgentCoreClientError) -> T {
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.keyDecodingStrategy = keys
         do {
             return try decoder.decode(type, from: data)
         } catch {
