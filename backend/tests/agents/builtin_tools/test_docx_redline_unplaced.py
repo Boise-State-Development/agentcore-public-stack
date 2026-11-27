@@ -339,6 +339,20 @@ class TestPlacedChangesAreUnchanged:
     def test_with_nothing_unplaced_comment_mode_is_fail_mode(self):
         assert _run(CONTRACT, *GOOD).docx == _run(CONTRACT, *GOOD, mode="fail").docx
 
+    def test_the_output_never_depends_on_the_clock(self, monkeypatch):
+        """An added part (the comments part) is dated from the package, not stamped with now.
+
+        The test above used to fail whenever its two calls fell on either side of a zip
+        timestamp's 2-second tick.
+        """
+        import time
+        import zipfile as zipfile_module
+
+        first = _run(CONTRACT, *GOOD).docx
+        later = time.time() + 3600
+        monkeypatch.setattr(zipfile_module.time, "time", lambda: later)
+        assert _run(CONTRACT, *GOOD).docx == first
+
     def test_insertions_place_identically_too(self):
         good = Change(
             "consequential damages",

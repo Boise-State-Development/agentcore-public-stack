@@ -1990,13 +1990,21 @@ def _write(
             override = f'<Override PartName="/{part_name}" ContentType="{_COMMENTS_CONTENT_TYPE}"/>'
             replaced[_CONTENT_TYPES] = (content_types[:close] + override + content_types[close:]).encode("utf-8")
 
+    # A part this package didn't have (the comments part) takes the main part's date, never the
+    # clock's: writestr(name, ...) stamps the current time, so the same input would give
+    # different bytes depending on when it ran.
+    infos = package.infolist()
+    stamp = next((i.date_time for i in infos if i.filename == "word/document.xml"), (1980, 1, 1, 0, 0, 0))
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as target_zip:
-        for info in package.infolist():
+        for info in infos:
             data = replaced.get(info.filename)
             target_zip.writestr(info, data if data is not None else package.read(info.filename))
         for name, data in added.items():
-            target_zip.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
+            added_info = zipfile.ZipInfo(name, date_time=stamp)
+            added_info.compress_type = zipfile.ZIP_DEFLATED
+            added_info.external_attr = 0o600 << 16  # what writestr(name, ...) gave it
+            target_zip.writestr(added_info, data)
     return RedlineResult(buffer.getvalue(), [summaries[i] for i in sorted(summaries)])
 
 
