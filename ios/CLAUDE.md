@@ -8,7 +8,7 @@ This adds to the repo-root `CLAUDE.MD` and doesn't replace it. The root file's c
 - **Swift 6.2 toolchain** (`.swift-version`, `swift-tools-version: 6.2`), Swift 6 language mode, `SWIFT_STRICT_CONCURRENCY = complete`, **every warning is an error** in both the app and the package. Xcode 26 or newer; CI builds with Xcode 27.
 - **Thin app, fat package.** The app target holds views and app lifecycle only. Models, networking, SSE parsing, auth and anything testable without a UI go in the local `AgentCoreKit` package.
 - Bundle id `org.example.agentcore` is a placeholder. A real one comes from the untracked `Config/Local.xcconfig`.
-- Status: sign-in works end to end against a deployment (`docs/specs/native-app-auth.md`), and the signed-in app has two tabs: a read-only conversation list and transcript, and the inbox, which answers a waiting scheduled run from the phone. Next are signed-in devices, push, and chat with streaming.
+- Status: sign-in works end to end against a deployment (`docs/specs/native-app-auth.md`), and the signed-in app has two tabs: a read-only conversation list and transcript, and the inbox, which answers a waiting scheduled run from the phone. A session signed out from the web app's Signed-in apps and terminals card is noticed when the app returns to the foreground (`SessionModel.revalidate`). Next are push, and chat with streaming.
 
 ## Open source first
 
