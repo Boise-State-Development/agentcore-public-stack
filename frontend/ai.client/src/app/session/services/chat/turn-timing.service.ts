@@ -26,6 +26,8 @@ export interface TurnTimingContext {
 interface PendingTurn {
   startedAt: number;
   context: TurnTimingContext;
+  /** When the first thinking text arrived, if any did before the first token. */
+  firstVisibleAt?: number;
 }
 
 /**
@@ -37,6 +39,12 @@ interface PendingTurn {
  * The server's own `FirstTokenMs` starts at the Runtime handler, so only this
  * measurement sees the app-api hop, Runtime routing and session start, which
  * is where the V2 Runtime and session prewarm changed the wait.
+ *
+ * Two clocks ride the one report. `firstTokenMs` stops on the first streamed
+ * delta, as it always has. `firstVisibleMs` stops on the first output the user
+ * can read: the first thinking text, or that same first delta when the model
+ * did not think first. On a turn that thinks, the gap between them is the time
+ * the user spent reading the model's thinking instead of waiting.
  *
  * - The report goes out after the first token has arrived, fire-and-forget
  *   with error toasts suppressed, so measuring never delays or disturbs a turn.
@@ -75,6 +83,17 @@ export class TurnTimingService {
     }
   }
 
+  /**
+   * Thinking text arrived: the first thing on screen the user can read. Only
+   * the first call per turn counts, and nothing is sent until `firstToken`.
+   */
+  firstVisible(sessionId: string): void {
+    const turn = this.pending.get(sessionId);
+    if (turn && turn.firstVisibleAt === undefined) {
+      turn.firstVisibleAt = performance.now();
+    }
+  }
+
   /** A streamed delta arrived. Reports the turn the first time, then forgets it. */
   firstToken(sessionId: string): void {
     const turn = this.pending.get(sessionId);
@@ -83,11 +102,17 @@ export class TurnTimingService {
     }
     this.pending.delete(sessionId);
     const firstTokenMs = Math.max(0, Math.round(performance.now() - turn.startedAt));
+    // No thinking before the first delta: that delta was the first thing to read.
+    const firstVisibleMs =
+      turn.firstVisibleAt === undefined
+        ? firstTokenMs
+        : Math.min(firstTokenMs, Math.max(0, Math.round(turn.firstVisibleAt - turn.startedAt)));
     this.http
       .post(
         `${this.config.appApiUrl()}/telemetry/turn-timing`,
         {
           firstTokenMs,
+          firstVisibleMs,
           turnKind: turn.context.turnKind,
           warmAgeMs: turn.context.warmAgeMs,
           ...(turn.context.preparedAgeMs != null ? { preparedAgeMs: turn.context.preparedAgeMs } : {}),

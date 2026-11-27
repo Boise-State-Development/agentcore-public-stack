@@ -115,6 +115,38 @@ def test_a_prepare_arm_records_under_its_own_name(emitted) -> None:
     assert "ClientPreparedFirstTokenMs" not in emitted[0]["metrics"]
 
 
+def test_first_visible_output_records_under_its_own_name(emitted) -> None:
+    """A turn that thinks first: the user reads thinking text long before the
+    answer starts. `ClientFirstTokenMs` keeps its meaning; the new name sits
+    beside it."""
+    resp = _post(TestClient(_app(_user())), firstTokenMs=18_400, firstVisibleMs=2_500, turnKind="followup")
+    assert resp.status_code == 204
+    (record,) = emitted
+    assert record["metrics"] == {
+        "ClientFirstTokenMs": 18_400,
+        "ClientFollowUpFirstTokenMs": 18_400,
+        "ClientFirstVisibleMs": 2_500,
+    }
+    assert record["units"]["ClientFirstVisibleMs"] == "Milliseconds"
+
+
+def test_a_turn_that_did_not_think_reports_the_two_clocks_equal() -> None:
+    report = routes.TurnTimingReport(firstTokenMs=1400, firstVisibleMs=1400, turnKind="followup")
+    assert routes.metrics_for(report)["ClientFirstVisibleMs"] == 1400
+
+
+def test_a_bundle_without_the_field_records_no_first_visible_metric(emitted) -> None:
+    """An SPA bundle that predates the field (a tab left open across a deploy)
+    must not be recorded as if its first token were its first visible output."""
+    assert _post(TestClient(_app(_user()))).status_code == 204
+    assert "ClientFirstVisibleMs" not in emitted[0]["metrics"]
+
+
+def test_first_visible_never_reads_later_than_the_first_token() -> None:
+    report = routes.TurnTimingReport(firstTokenMs=1400, firstVisibleMs=9000, turnKind="followup")
+    assert routes.metrics_for(report)["ClientFirstVisibleMs"] == 1400
+
+
 def test_an_unknown_prepare_arm_is_rejected() -> None:
     assert _post(TestClient(_app(_user())), prepareArm="other").status_code == 422
 
@@ -141,6 +173,8 @@ def test_records_no_identity(emitted) -> None:
     [
         {"firstTokenMs": -1},
         {"firstTokenMs": 600_001},
+        {"firstVisibleMs": -1},
+        {"firstVisibleMs": 600_001},
         {"turnKind": "resume"},
         {"modelId": "x" * 201},
         {"warmAgeMs": -5},

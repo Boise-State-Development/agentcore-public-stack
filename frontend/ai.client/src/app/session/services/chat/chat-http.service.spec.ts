@@ -303,6 +303,33 @@ describe('ChatHttpService', () => {
     vi.restoreAllMocks();
   });
 
+  it('notes the first thinking text for the first-visible clock, and only text', async () => {
+    // The `reasoning` event also carries empty frames and signature-only ones
+    // (stream_processor.py); neither is anything the user can read.
+    const timing = TestBed.inject(TurnTimingService);
+    const firstVisible = vi.spyOn(timing, 'firstVisible').mockImplementation(() => undefined);
+    const firstToken = vi.spyOn(timing, 'firstToken').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        'event: message_start\ndata: {}\n\n'
+          + 'event: reasoning\ndata: {}\n\n'
+          + 'event: reasoning\ndata: {"reasoning_signature":"abc"}\n\n'
+          + 'event: reasoning\ndata: {"reasoningText":"\\n"}\n\n'
+          + 'event: reasoning\ndata: {"reasoningText":"Counting tilings."}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"text","text":"153"}\n\n'
+          + 'event: done\ndata: {}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+
+    await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+
+    expect(firstVisible).toHaveBeenCalledTimes(1);
+    expect(firstVisible).toHaveBeenCalledWith('s1');
+    expect(firstVisible.mock.invocationCallOrder[0]).toBeLessThan(firstToken.mock.invocationCallOrder[0]);
+    vi.restoreAllMocks();
+  });
+
   it('surfaces a soft "Already responding" notice (not a hard error) on a 409 single-flight rejection', async () => {
     // The inference-api single-flight guard rejects a duplicate turn while the
     // prior one is still streaming server-side; the BFF relays it as 409.
