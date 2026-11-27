@@ -463,3 +463,36 @@ class TestNeedsReauthGrant:
         )
         assert grant.pinned_session_id == "sess-1"
         assert table.put_items[0]["pinned_session_id"] == "sess-1"
+
+
+class TestExpiryWarnedOncePerEpoch:
+    @pytest.mark.asyncio
+    async def test_claims_the_epoch_conditionally(self):
+        table = FakeTable([_grant_item()])
+
+        assert await _service(table).mark_expiry_warned("hlg-abc", NOW - 100)
+
+        (call,) = table.update_calls
+        assert call["ExpressionAttributeValues"][":iss"] == NOW - 100
+        assert "token_issued_at = :iss" in call["ConditionExpression"]
+        assert "expiry_warned_for <> :iss" in call["ConditionExpression"]
+
+    @pytest.mark.asyncio
+    async def test_a_second_claim_loses(self):
+        table = FakeTable([_grant_item()])
+        table.update_error = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+
+        assert not await _service(table).mark_expiry_warned("hlg-abc", NOW - 100)
+
+    @pytest.mark.asyncio
+    async def test_a_mint_remembers_the_grant_it_used(self):
+        auth = CognitoRefreshBearerAuth(
+            grants=FakeGrants(_live_grant()),
+            refresh_client=FakeRefreshClient(
+                RefreshResult(access_token="at", refresh_token="rt-stored", id_token=None, access_token_exp=NOW + 3600)
+            ),
+        )
+
+        await auth.mint_bearer_for_user("user-1")
+
+        assert auth.last_grant is not None and auth.last_grant.ttl == NOW + 1000

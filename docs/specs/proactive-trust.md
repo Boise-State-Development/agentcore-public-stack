@@ -260,6 +260,13 @@ The grant's expiry is exact. Every run already mints from the grant (`CognitoRef
 - **Every warning needs the owner's email.** The inbox is keyed by email, and a schedule created before its owner's email was recorded has none until they next list their schedules (`remember_owner_email`, `pausing.py`). Such a warning is skipped and logged today. So the warning also shows as a banner on `/schedules` from `GET /runs/grant`'s `expiresAt`, which needs no email, and the budget notice shows on the schedule page from `spendToday`.
 - **No run, no warning.** A user whose schedules are all paused gets none, because nothing would fail.
 
+**As built (PR 4.3):**
+- `CognitoRefreshBearerAuth.last_grant` hands the grant to the runner, which sets `RunResult.grant_id`, `grant_expires_at` and `grant_issued_at`.
+- The rule and the bell row live in `apis/shared/scheduled_prompts/grant_warning.py`. The worker calls them after every run while `PROACTIVE_RUNS_ENABLED` is on, project schedules included, since they run on their creator's grant too.
+- The epoch claim is `HeadlessGrantService.mark_expiry_warned`, writing `expiry_warned_for`.
+- A re-pin settles the rows. Enable, Run now and an inbox answer (`_resolve_grant`) and a web sign-in (`_repin_grant_after_web_sign_in`) each call `grant_expiry_settled`, which marks the `connection_expiring` rows read once the new expiry is past the window.
+- `/schedules` shows the same warning from `GET /runs/grant` with **Renew**. When renewing from this session moves nothing, it switches to **Sign in again**, which signs out so the next sign-in re-pins.
+
 ### 5.2 Re-pin at sign-in, and a grant that survives a sign-out (§12 Q9, built)
 
 The grant's own docstring states the policy as "the platform may act headlessly as a user only within 30 days **of the login**". Before #2518 it was 30 days from the login of the session the user last enabled from, because only Run now, Enable and an inbox answer re-pinned it, and a re-pin keeps that session's login time. The re-pin at sign-in, as built:
@@ -325,6 +332,8 @@ A vaulted token's expiry can't be read, so a connector can only be found already
 3. resolves their `schedule_paused` bell rows.
 
 The read is one Query on the caller's `SCHEDPROMPT#` items, which `GET /schedules` already makes. `complete_consent` already resumes the caller's KB sync policies the same way, so this follows an existing pattern. This is a fix to slice 0's behaviour, unflagged (§10.2).
+
+**As built (PR 4.3):** `apis/shared/scheduled_prompts/reconnect.py`. `resume_next_run_at` is now the one resume time, and the Resume button (`_resume_time`) calls it too. `complete_consent` calls `resume_after_reconnect` after the KB sync policies, best-effort.
 
 **Held: a pre-flight before low-frequency runs (§12 Q10).** For a schedule that runs daily or less often, a check some hours before its run would let the user reconnect the evening before, rather than at 8 a.m. when the run fails. **Decided: held** (§12 Q10). It is built only if data shows `oauth_required` pauses are common; the grant-expiry warning (§5.1) ships regardless. The shape, kept for then:
 

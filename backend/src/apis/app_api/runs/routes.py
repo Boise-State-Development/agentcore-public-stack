@@ -240,10 +240,15 @@ async def _resolve_grant(request: Request, user: User) -> HeadlessGrant:
         # before, once no live session holds it (``grant_tokens``).
         from apis.app_api.auth.bff import grant_tokens
 
+        from apis.shared.scheduled_prompts.grant_warning import grant_expiry_settled
+
         repository, cognito = get_grant_token_deps()
-        return await grant_tokens.pin_grant(
+        grant = await grant_tokens.pin_grant(
             session_record, grants=grants, repository=repository, cognito=cognito
         )
+        # A re-pin that clears the warning window settles "scheduled runs stop soon".
+        await asyncio.to_thread(grant_expiry_settled, user.email, grant.ttl)
+        return grant
     grant = await grants.get_active_grant(user.user_id)
     if grant is None:
         raise HTTPException(

@@ -336,3 +336,29 @@ class TestWebSignIn:
 
         assert response.status_code == 302
         assert SESSION_COOKIE_NAME in " ".join(response.headers.get_list("set-cookie"))
+
+
+class TestWebSignInSettlesTheExpiryWarning:
+    def test_a_repin_settles_with_the_sign_ins_email(self, app, monkeypatch, revoke):
+        import apis.shared.scheduled_prompts.grant_warning as grant_warning
+
+        calls = []
+        monkeypatch.setattr(grant_warning, "grant_expiry_settled", lambda email, ttl, **_: calls.append((email, ttl)) or 0)
+        grants = _use_grants(monkeypatch, FakeGrants(_grant(token="old.t", pinned="sess-signed-out")))
+
+        _sign_in_on_the_web(app, monkeypatch)
+
+        assert len(calls) == 1
+        email, ttl = calls[0]
+        assert email and ttl == grants.grant.ttl
+
+    def test_no_active_grant_settles_nothing(self, app, monkeypatch):
+        import apis.shared.scheduled_prompts.grant_warning as grant_warning
+
+        calls = []
+        monkeypatch.setattr(grant_warning, "grant_expiry_settled", lambda email, ttl, **_: calls.append(email) or 0)
+        _use_grants(monkeypatch, FakeGrants(None))
+
+        _sign_in_on_the_web(app, monkeypatch)
+
+        assert calls == []

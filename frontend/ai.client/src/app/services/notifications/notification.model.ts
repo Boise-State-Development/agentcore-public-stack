@@ -34,7 +34,9 @@ export type NotificationKind =
   // A scheduled run paused on the user (answer-from-inbox §3.3): one per pause.
   // `agent_needs_approval` when every prompt is a tool approval.
   | 'agent_needs_approval'
-  | 'agent_needs_input';
+  | 'agent_needs_input'
+  // The user's headless grant lapses soon (proactive-trust §5.1): payload {scope, expiresAt, scheduleCount}.
+  | 'connection_expiring';
 
 /** The inbox kinds that wait on the user until answered or expired. */
 export const NEEDS_USER_NOTIFICATION_KINDS: ReadonlySet<NotificationKind> = new Set([
@@ -128,6 +130,8 @@ export interface AppNotification {
     expiresAt?: string;
     answerable?: boolean;
     prompts?: NeedsUserPrompt[];
+    scope?: string;
+    scheduleCount?: number;
   } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;

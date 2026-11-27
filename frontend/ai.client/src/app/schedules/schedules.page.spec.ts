@@ -12,6 +12,7 @@ import { ScheduledPrompt } from './models/schedule.model';
 import { GrantStatus } from './models/grant.model';
 import { ProjectsService } from '../projects/services/projects.service';
 import { FEATURES } from '../services/features';
+import { SessionService } from '../auth/session.service';
 
 function stubSchedule(overrides: Partial<ScheduledPrompt> = {}): ScheduledPrompt {
   return {
@@ -101,6 +102,7 @@ describe('SchedulesPage', () => {
         { provide: ToastService, useValue: mockToast },
         { provide: ProjectsService, useValue: projectsStub() },
         { provide: FEATURES, useValue: { projects: true } },
+        { provide: SessionService, useValue: { logout: vi.fn().mockResolvedValue(undefined) } },
       ],
     });
     TestBed.overrideComponent(SchedulesPage, { set: { template: '<div></div>' } });
@@ -120,6 +122,48 @@ describe('SchedulesPage', () => {
     createComponent();
     expect(mockScheduleService.loadSchedules).toHaveBeenCalled();
     expect(mockGrantService.loadStatus).toHaveBeenCalled();
+  });
+
+  describe('a grant about to lapse (proactive-trust §5.1)', () => {
+    const inDays = (days: number) => Math.floor(Date.now() / 1000) + days * 24 * 60 * 60;
+
+    it('warns when an enabled grant lapses within three days', () => {
+      mockGrantService.status$.set({ enabled: true, expiresAt: inDays(2) });
+      expect(createComponent().grantExpiresAt()).not.toBeNull();
+    });
+
+    it('says nothing when the grant has weeks left', () => {
+      mockGrantService.status$.set({ enabled: true, expiresAt: inDays(20) });
+      expect(createComponent().grantExpiresAt()).toBeNull();
+    });
+
+    it('renews, and settles when the new expiry clears the window', async () => {
+      mockGrantService.status$.set({ enabled: true, expiresAt: inDays(2) });
+      mockGrantService.enable.mockResolvedValue({ enabled: true, expiresAt: inDays(30) });
+      const component = createComponent();
+
+      await component.onRenewScheduledRuns();
+
+      expect(component.renewNeedsSignIn()).toBe(false);
+      expect(mockToast.success).toHaveBeenCalled();
+    });
+
+    it('asks for a new sign-in when renewing from this session moves nothing', async () => {
+      mockGrantService.status$.set({ enabled: true, expiresAt: inDays(2) });
+      mockGrantService.enable.mockResolvedValue({ enabled: true, expiresAt: inDays(2) });
+      const component = createComponent();
+
+      await component.onRenewScheduledRuns();
+
+      expect(component.renewNeedsSignIn()).toBe(true);
+      expect(mockToast.success).not.toHaveBeenCalled();
+    });
+
+    it('signs out so the next sign-in re-pins the grant', async () => {
+      const component = createComponent();
+      await component.onSignInToRenew();
+      expect(TestBed.inject(SessionService).logout).toHaveBeenCalled();
+    });
   });
 
   it('needsEnablement is true when the grant is disabled', () => {
@@ -307,6 +351,7 @@ describe('SchedulesPage with a project schedule', () => {
         { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn() } },
         { provide: ProjectsService, useValue: projectsStub([{ projectId: 'prj_1', name: 'Enrollment Sync' }]) },
         { provide: FEATURES, useValue: { projects: true } },
+        { provide: SessionService, useValue: { logout: vi.fn().mockResolvedValue(undefined) } },
       ],
     });
   });
@@ -369,6 +414,7 @@ describe('SchedulesPage and quiet watchers', () => {
         { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn() } },
         { provide: ProjectsService, useValue: projectsStub([{ projectId: 'prj_1', name: 'Enrollment Sync' }]) },
         { provide: FEATURES, useValue: { projects: true, proactiveRuns } },
+        { provide: SessionService, useValue: { logout: vi.fn().mockResolvedValue(undefined) } },
       ],
     });
     const fixture = TestBed.createComponent(SchedulesPage);

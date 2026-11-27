@@ -14,6 +14,7 @@ import {
 import { ToastService } from '../services/toast/toast.service';
 import { FEATURES } from '../services/features';
 import { ProjectsService } from '../projects/services/projects.service';
+import { SessionService } from '../auth/session.service';
 import { cadenceSummary, relativeFuture, relativePast, scheduleStopSentence } from './schedule-wording';
 
 /**
@@ -27,6 +28,9 @@ import { cadenceSummary, relativeFuture, relativePast, scheduleStopSentence } fr
  * `ScheduleService.accessible$` to false and this page renders a graceful
  * "not available" state instead of an error.
  */
+/** How far ahead a lapsing grant is warned about (the backend's `grant_warning.WARN_WINDOW`). */
+const GRANT_WARNING_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
 @Component({
   selector: 'app-schedules-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -41,6 +45,7 @@ export class SchedulesPage implements OnInit {
   private readonly dialog = inject(Dialog);
   private readonly toast = inject(ToastService);
   private readonly projects = inject(ProjectsService);
+  private readonly session = inject(SessionService);
   protected readonly features = inject(FEATURES);
 
   readonly schedules = this.scheduleService.schedules$;
@@ -56,6 +61,20 @@ export class SchedulesPage implements OnInit {
   );
 
   readonly needsEnablement = computed(() => !this.grantStatus().enabled);
+
+  /**
+   * When an enabled grant lapses, if that is within the warning window
+   * (proactive-trust §5.1): the same warning the bell carries, shown here from
+   * `GET /runs/grant` so it needs no inbox row (or owner email).
+   */
+  readonly grantExpiresAt = computed(() => {
+    const status = this.grantStatus();
+    const expiresAt = status.enabled ? status.expiresAt : null;
+    return expiresAt && expiresAt * 1000 - Date.now() <= GRANT_WARNING_WINDOW_MS ? new Date(expiresAt * 1000) : null;
+  });
+
+  /** Renewing from this session moved nothing: its own login is too old, so only a new sign-in renews. */
+  readonly renewNeedsSignIn = signal(false);
 
   /** Project names by id, from the list the sidebar already loads. */
   private readonly projectNames = computed(
@@ -106,6 +125,29 @@ export class SchedulesPage implements OnInit {
         'Please try again, or refresh the page and log in again.',
       );
     }
+  }
+
+  /**
+   * Renew a grant about to lapse. A re-pin anchors on this session's login, so it
+   * only helps when that login is recent: otherwise it asks for a new sign-in,
+   * which re-pins the grant on the way back in.
+   */
+  async onRenewScheduledRuns(): Promise<void> {
+    try {
+      const status = await this.grantService.enable();
+      const stillSoon = !!status.expiresAt && status.expiresAt * 1000 - Date.now() <= GRANT_WARNING_WINDOW_MS;
+      this.renewNeedsSignIn.set(stillSoon);
+      if (!stillSoon) {
+        this.toast.success('Scheduled runs renewed', 'Your schedules keep running for another 30 days.');
+      }
+    } catch {
+      this.toast.error('Could not renew scheduled runs', 'Please try again, or sign in again.');
+    }
+  }
+
+  /** Sign out and back in: the new sign-in re-pins the grant to a fresh login. */
+  async onSignInToRenew(): Promise<void> {
+    await this.session.logout();
   }
 
   /** Re-enable path for a paused_error schedule whose reason is reauth_required. */

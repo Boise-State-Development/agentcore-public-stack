@@ -514,3 +514,41 @@ class TestForceReauthLifecycle:
 
         assert response.status_code == 200
         assert ("alice", "google") not in repo.disconnected
+
+
+class TestCompleteConsentResumesSchedules:
+    """Reconnecting a provider resumes the schedules a run paused on it (proactive-trust §5.3)."""
+
+    def _consent(self, app_for_user, monkeypatch, resume):
+        import apis.shared.scheduled_prompts.reconnect as reconnect
+
+        repo = _FakeDisconnectRepo()
+        monkeypatch.setattr(routes, "_agentcore_control_client", lambda: MagicMock())
+        monkeypatch.setattr(reconnect, "resume_after_reconnect", resume)
+        app = app_for_user("alice")
+        app.dependency_overrides[get_disconnect_repository] = lambda: repo
+        return TestClient(app).post(
+            "/connectors/complete-consent",
+            json={"session_uri": "uri-abc", "provider_id": "google"},
+        )
+
+    def test_resumes_for_the_caller_and_the_provider(self, app_for_user, monkeypatch):
+        calls = []
+
+        async def resume(user_id, provider_id, *, email=None, notifications=None):
+            calls.append((user_id, provider_id, email))
+            return ["sched-1"]
+
+        response = self._consent(app_for_user, monkeypatch, resume)
+
+        assert response.status_code == 200
+        assert calls == [("alice", "google", "alice@example.com")]
+
+    def test_a_resume_failure_never_fails_the_consent(self, app_for_user, monkeypatch):
+        async def resume(user_id, provider_id, *, email=None, notifications=None):
+            raise RuntimeError("ddb down")
+
+        response = self._consent(app_for_user, monkeypatch, resume)
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}

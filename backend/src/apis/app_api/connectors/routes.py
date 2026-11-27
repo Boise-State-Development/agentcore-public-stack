@@ -401,6 +401,21 @@ async def complete_consent(
                 resume_err,
             )
 
+        # The same for the user's schedules a run paused on this provider
+        # (docs/specs/proactive-trust.md §5.3): exact provider match, the budget
+        # hold respected, project schedules left to their project. Best-effort.
+        try:
+            from apis.shared.scheduled_prompts.reconnect import resume_after_reconnect
+
+            await resume_after_reconnect(current_user.user_id, body.provider_id, email=current_user.email)
+        except Exception as resume_err:
+            logger.warning(
+                "Failed to resume oauth-paused schedules for user=%s provider=%s: %s",
+                current_user.user_id,
+                scrub_log(body.provider_id),
+                resume_err,
+            )
+
     logger.info(
         "Completed OAuth consent for user=%s provider=%s",
         current_user.user_id,

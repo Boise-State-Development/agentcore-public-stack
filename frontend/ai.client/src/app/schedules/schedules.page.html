@@ -53,6 +53,45 @@
         </div>
       }
 
+      <!-- A grant about to lapse (proactive-trust §5.1) -->
+      @if (!loading() && grantExpiresAt(); as expiresAt) {
+        <div class="mb-6 flex flex-col gap-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-state-warning-900/40 dark:bg-state-warning-900/10" role="status">
+          <div>
+            @if (renewNeedsSignIn()) {
+              <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">Sign in again to keep scheduled runs going</p>
+              <p class="mt-0.5 text-xs/5 text-state-warning-800/80 dark:text-state-warning-300/80">
+                This sign-in is too old to renew them. Signing in again renews them for 30 days.
+              </p>
+            } @else {
+              <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
+                Scheduled runs stop {{ expiresAt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }} unless you renew them
+              </p>
+              <p class="mt-0.5 text-xs/5 text-state-warning-800/80 dark:text-state-warning-300/80">
+                Renewing lets your active schedules keep running unattended for another 30 days.
+              </p>
+            }
+          </div>
+          @if (renewNeedsSignIn()) {
+            <button
+              type="button"
+              (click)="onSignInToRenew()"
+              class="inline-flex shrink-0 items-center justify-center rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            >
+              Sign in again
+            </button>
+          } @else {
+            <button
+              type="button"
+              (click)="onRenewScheduledRuns()"
+              [disabled]="grantBusy()"
+              class="inline-flex shrink-0 items-center justify-center rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {{ grantBusy() ? 'Renewing…' : 'Renew' }}
+            </button>
+          }
+        </div>
+      }
+
       <!-- Content -->
       @if (loading()) {
         <div class="space-y-3">

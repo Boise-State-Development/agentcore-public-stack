@@ -706,6 +706,20 @@ class TestGrantRoutes:
         assert h.cognito.revoked == []
 
 
+class TestRepinSettlesTheExpiryWarning:
+    """A re-pin that moves the grant past the warning window settles its bell rows (§5.1)."""
+
+    def test_enable_settles_with_the_callers_email_and_the_new_expiry(self, monkeypatch):
+        import apis.shared.scheduled_prompts.grant_warning as grant_warning
+
+        calls = []
+        monkeypatch.setattr(grant_warning, "grant_expiry_settled", lambda email, ttl, **_: calls.append((email, ttl)) or 0)
+        client, h = _make_client(monkeypatch, with_session_record=True)
+
+        assert client.post("/runs/grant").status_code == 200
+        assert calls == [(_user().email, h.grants.grant.ttl)]
+
+
 class TestRepinReleasesTheOldToken:
     def test_repin_revokes_the_token_of_a_signed_out_session(self, monkeypatch):
         grant = _grant()

@@ -118,6 +118,7 @@ from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.conversation_resume import WATCH_RESUME_REPORT_ATTR, apply_conversation_resume
 from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX, ScheduledPrompt
 from apis.shared.scheduled_prompts.budget import count_run_cost, mark_cost_pending, reconcile_pending_costs
+from apis.shared.scheduled_prompts.grant_warning import maybe_warn_grant_expiry
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.needs_user import (
     INBOX_RESUME_KIND,
@@ -694,6 +695,10 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
             max_failures=_env_int("SCHEDULED_RUNS_MAX_FAILURES", 3),
             result_label="error",
         )
+
+    if proactive_runs_enabled():
+        # Before the grant lapses, not after a run fails on it (proactive-trust §5.1).
+        await maybe_warn_grant_expiry(schedule, result)
 
     if result.status == "oauth_required":
         detail = None
