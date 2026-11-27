@@ -42,6 +42,11 @@ this conversation never read can't be replaced blind.
 asked to "update the team name" saved the file's items under a new name, leaving the old
 file in place, and told the member it had renamed it. A save to a new name that carries
 another file's anchors now says which file they came from and how to rename it.
+
+The specs state the description's length limit (2026-11-27). ``memory_save`` asked for
+"the rule itself" as the description and never said it is capped, so a model wrote the
+whole rule and was refused: in production that one refusal was 24 of the 41 failed saves
+whose result length was recorded over 28 days, each one a file re-sent in full.
 """
 
 from __future__ import annotations
@@ -57,6 +62,7 @@ from typing import Any, Literal, Optional, Tuple
 from strands import ToolContext, tool
 
 from apis.shared.auth.models import User
+from apis.shared.memory.format import MAX_DESCRIPTION_CHARS
 from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
 from apis.shared.memory.service import (
     NEW_FILE,
@@ -314,6 +320,16 @@ async def _anchor_hint(
 
 def _error(text: str) -> dict[str, Any]:
     return {"content": [{"text": f"❌ {text}"}], "status": "error"}
+
+
+def _refused(exc: MemoryValidationError) -> str:
+    """A validation refusal's text, with what to send instead where the message alone doesn't say."""
+    if exc.code == "description_too_long":
+        return (
+            f"{exc} Send the same call again with `description` cut to one line of "
+            f"{MAX_DESCRIPTION_CHARS} characters or fewer; the detail belongs in the file's items."
+        )
+    return str(exc)
 
 
 def _bad_scope(scope: str) -> Optional[dict[str, Any]]:
@@ -620,7 +636,7 @@ async def _save_file(
         hint = ""
         if exc.code == "unknown_anchor" and base is None and service is not None:
             hint = await _anchor_hint(service, space_id, session_id, user, slug, text)
-        return _error(f"Not saved: {exc}{hint}")
+        return _error(f"Not saved: {_refused(exc)}{hint}")
     except MemoryEntryNotFoundError:
         return _error(f'Not saved: {label} has no file named "{renaming or slug}".')
     except MemorySpaceConcurrencyError:
@@ -690,7 +706,7 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
 
         `description` is the file's line in that scope's MEMORY.md index, which appears
         in every conversation and is often all a later one reads. Send it on every save,
-        and when your change makes it wrong (a date, number, name or rule it states),
+        in 160 characters or fewer (a longer one is refused and nothing is saved), and when your change makes it wrong (a date, number, name or rule it states),
         write a new one: the index line is rewritten to match it. The save writes that
         line itself, so don't also save MEMORY.md to add or change a file's line.
 
@@ -704,8 +720,9 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             slug: The file name: lowercase words joined by "-", optionally grouped
                 with "/" (e.g. "decisions/vendor"), or "MEMORY.md" for the index.
             text: The file's items, one "- " line each.
-            description: One line summing up the file as saved; it is the file's MEMORY.md
-                line. For a preference or rule, the rule itself. Ignored for "MEMORY.md".
+            description: One line of at most 160 characters summing up the file as saved;
+                it is the file's MEMORY.md line. For a preference or rule, the rule itself,
+                kept that short: the full wording goes in `text`. Ignored for "MEMORY.md".
             replaces: Only to rename a file: its current name. Leave empty otherwise.
         """
         flight = _begin_save(tool_context, scopes, scope, slug)
@@ -735,7 +752,7 @@ def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
         Args:
             slug: The project file to create or change, as in `memory_save`.
             text: The whole proposed file, one "- " item per line.
-            description: One line describing the file.
+            description: One line of at most 160 characters describing the file.
         """
         session_id = _session_of(tool_context)
         return await _propose(scopes, slug, text, description, session_id, unattended=is_headless_session(session_id))
@@ -765,7 +782,7 @@ async def _propose(
             )
         )
     except MemoryValidationError as exc:
-        return _error(f"Not proposed: {exc}")
+        return _error(f"Not proposed: {_refused(exc)}")
     except ProposalProjectError as exc:
         return _error(str(exc))
     except (MemorySpacePermissionError, MemorySpaceNotFoundError):

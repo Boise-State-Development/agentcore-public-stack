@@ -73,10 +73,22 @@ class TestProjectHarnessSpecs:
         description = " ".join(self._specs()["memory_save"]["description"].split())
         assert "The save writes that line itself, so don't also save MEMORY.md to add or change a file's line" in description
 
+    def test_save_and_propose_state_the_description_limit(self):
+        """Production: a description past the limit was memory_save's most common refusal,
+        and the spec asked for "the rule itself" without saying it is capped."""
+        from apis.shared.memory.format import MAX_DESCRIPTION_CHARS
+
+        specs = self._specs()
+        for name in ("memory_save", "memory_propose"):
+            arg = specs[name]["inputSchema"]["json"]["properties"]["description"]["description"]
+            assert f"at most {MAX_DESCRIPTION_CHARS} characters" in " ".join(arg.split()), name
+        description = " ".join(specs["memory_save"]["description"].split())
+        assert f"in {MAX_DESCRIPTION_CHARS} characters or fewer (a longer one is refused" in description
+
     #: The specs sit in the cacheable ``toolConfig``. A change here is a deliberate
     #: prefix rewrite at deploy: update the pin with it and state the token delta in
-    #: the PR. Last changed when memory_save said it writes the index line itself.
-    SPEC_DIGEST = "52375e8d97dfe85810ebb6b2b3af9ba1ee2b4de8c7d4b84890ebfc05aaeece46"
+    #: the PR. Last changed when memory_save and memory_propose stated the description limit.
+    SPEC_DIGEST = "62abf9315212c879a9f04a54ef1cc47f4aa0f7fce037e21dd6f8d62fc76958e2"
 
     def test_the_specs_are_pinned(self):
         import hashlib
