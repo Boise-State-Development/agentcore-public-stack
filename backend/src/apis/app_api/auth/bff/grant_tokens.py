@@ -38,6 +38,21 @@ from apis.shared.sessions_bff.repository import SessionRepository
 logger = logging.getLogger(__name__)
 
 
+def may_pin(record: SessionRecord, *, from_header: bool) -> bool:
+    """Whether ``record``'s session may become the one a headless grant holds.
+
+    Only a browser session may: one presented by the session cookie, on a row
+    that isn't the phone's. A session presented as ``Authorization: BFF`` is the
+    terminal's or the phone's, and a ``client = "native"`` row is the phone's.
+    Their sessions end on their own terms (a phone's never slides and lasts
+    30 days from its sign-in; either can be revoked from Signed-in devices or
+    signed out of the app), and a grant pinned to one inherits that end: every
+    scheduled run the user has would stop with it. So those sessions use the
+    grant as it is, and never move it.
+    """
+    return not from_header and not record.is_native
+
+
 def _same_token(a: Optional[str], b: Optional[str]) -> bool:
     return bool(a) and bool(b) and hmac.compare_digest(a, b)
 
@@ -113,6 +128,9 @@ async def pin_grant(
     passes False and creates or renews the grant as before.
     """
     previous = await grants.get_active_grant(record.user_id)
+    if record.is_native:
+        # Never the phone's session, whoever calls (``may_pin``).
+        return previous
     if only_if_active and previous is None:
         return None
     if (

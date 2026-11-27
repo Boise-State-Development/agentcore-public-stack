@@ -300,6 +300,8 @@ Only Run now, or revoking and re-enabling the grant, pins a live token again, an
    - **What a sign-out leaves alive.** The refresh token, server-side only, in the grant. It is bounded by the grant's own window (the token's 30-day validity, from the same login) and ends when the user revokes the grant.
 3. **A web sign-in re-pins an active grant** (`_repin_grant_after_web_sign_in` in `bff_callback`). It runs after the session row is written and before the browser redirect: one Query, plus one `UpdateItem` when there is an active grant, never failing the sign-in. The terminal's device flow and the phone's native exit return before it. It never creates a grant and never revives a revoked or `needs_reauth` one.
 
+**Only a browser session is ever the pin** (found on dev, 2026-11-27). Run now, `POST /runs/grant` and an inbox answer from the phone or the terminal had re-pinned the grant onto that device's session. Revoking the device or signing out of the app would then stop every scheduled run, and a phone's session ends 30 days after its sign-in whatever the user does. `grant_tokens.may_pin` now allows only a cookie-presented, non-native session. The phone and the terminal use the active grant as it is, and get a 409 ("turn them on in the web app") when there is none. A grant already pinned to a phone moves back at the next web sign-in, and the phone keeps its token.
+
 **Not built: the grant's own refresh token.** A sign-in made for the grant, so no browser session shares its token, would separate the two lifetimes fully. It is a design of its own.
 
 **The live check, on dev (2026-11-27).**
