@@ -1,6 +1,6 @@
 # Proactive Trust — Slice 4 of the Proactive Agent Gaps
 
-**Status:** Draft build plan. Nothing here is built. The developer settles §12 before any PR starts.
+**Status:** Build plan. Nothing here is built. The developer settled §12 on 2026-11-27, except Q9 (re-pin at sign-in), which waits on the live logout check (§5.2). The PR plan (§11) can start; each build PR is the developer's call. PR 4.0 is merged and dev-checked (#2495).
 **Date:** 2026-11-26
 **Targets branch:** `develop`
 **Parent:** `docs/specs/proactive-agent-gaps.md` (slice 4: G7 standing instructions and dismissals, G8's pre-flight, G9 budgets and governance)
@@ -28,7 +28,7 @@ The gap spec (2026-11-25) proposed shapes before slices 1, 2 and triage were bui
 | G7: the attention page is a Memory Space page the job binds; "agent edits reuse the existing rule that a scheduled run's shared-memory saves become proposals" | Memory Spaces reach a run **only through a Shared Project** (`agents/builtin_tools/memory_spaces/project_tools.py`, scopes `project` and `mine`). A personal run has no memory-space tool and no binding. The proposal rule is project-scope only: `ProjectMemoryProposals`, reviewed by the project's editors | A personal watcher can't bind a page today. §3.1 puts the instructions on the schedule, and the agent's edits become suggestions in the bell. A Memory Space binding stays the path once personal spaces reach runs (§12 Q4) |
 | G4: `dismiss`, `not_useful`, `snooze` on an item, "recorded as feedback for G7" | None is built. The bell has **read** only (`/notifications/{id}/read`, `/read-all`). Reading is the normal case, so it is no signal | §3.2 adds **Not useful** (and **Useful**) as the signal. Dismiss and Snooze are not feedback and stay out of this slice |
 | G8: "warns at 'expires in 3 days'" for the grant **and** vaulted OAuth tokens | The grant's expiry is exact: `HeadlessGrant.ttl = token_issued_at + 30 days`. A connector's is **unknowable**: `resolve_token_or_consent_url` answers "a token" or "a consent URL", with no expiry, and AgentCore refreshes behind it | The grant gets a real "expires in N days" warning (§5.1). A connector can only be found **already lapsed**, ahead of the run that needs it (§5.3) |
-| G8: the grant lapses "30 days without a login" | The grant re-pins only on Run now, **Enable scheduled runs** and an inbox answer (`_resolve_grant` in `apis/app_api/runs/routes.py`). Signing in does not re-pin it. A re-pin anchors on the **pinned session's own login** (`token_issued_at = session.created_at`), not on now. Signing out of that session revokes its Cognito refresh token (`_revoke_refresh_token`), which is the token the grant holds | A user who signs in every day still loses scheduled runs 30 days after the login of the session they enabled from, which can be much sooner than 30 days after the click. Signing out of that session may stop them at once (to verify on dev, §5.2). §5.2 proposes re-pinning at sign-in (§12 Q9) |
+| G8: the grant lapses "30 days without a login" | The grant re-pins only on Run now, **Enable scheduled runs** and an inbox answer (`_resolve_grant` in `apis/app_api/runs/routes.py`). Signing in does not re-pin it. A re-pin anchors on the **pinned session's own login** (`token_issued_at = session.created_at`), not on now. Signing out of that session revokes its Cognito refresh token (`_revoke_refresh_token`), which is the token the grant holds | A user who signs in every day still loses scheduled runs 30 days after the login of the session they enabled from, which can be much sooner than 30 days after the click. Signing out of that session stops them at once, with nothing telling the user how to recover (found in code and config, §5.2). §5.2 recommends fixing that before re-pinning at sign-in (§12 Q9) |
 | G9: "summed from its runs' `C#` rows by `runId`" | `C#` rows carry **no `runId`** (`store_message_metadata`); they are keyed by session. They are also written **after `done`**, so a worker that reads them at the end of a run races them | The run's cost comes from the turn's final `metadata` frame, which already carries `cost.total`, priced per call by the same calculator the `C#` rows use (§4.1) |
 | G9: "an interval under 1 hour requires a triage model to be set" | Tier 1 needs **no** model. Tier 2 has **no default** model and may never be built (`quiet-watcher-triage.md` §2.2, §7). Slice 1 decided on a form note, not a refusal (`quiet-watcher.md` §3.1) | The guard is a **budget**, not a model: §4.4 |
 | G9: admin spend "under its own `callKind`" | A watch run's calls are **turns**: `call_kind()` buckets them `chat`. Only side calls carry a `callKind` (the tier 2 decider will be `watch_triage`) | Unattended spend is split by **run trigger**, not `callKind`, so a turn stays a turn (§8) |
@@ -122,7 +122,7 @@ The new instructions in full, and one line on why.
   - **Dismiss** removes `pendingSuggestion` only.
 - **Nothing is applied without Accept.** A watcher reads untrusted content (an email, a web page). Injected text could steer it to suggest "never tell me about security alerts". The suggestion is shown in full, as a diff, before it can change anything.
 
-**Why not let the counts suppress items directly.** A watcher that silently learns to stop reporting a source is the failure the triage spec calls the worst one: cheap and silent while something needs the user (`quiet-watcher-triage.md` §1.1). A suggestion keeps the change visible and reversible. Whether the model may also weigh the counts on its own is §12 Q5.
+**Why not let the counts suppress items directly.** A watcher that silently learns to stop reporting a source is the failure the triage spec calls the worst one: cheap and silent while something needs the user (`quiet-watcher-triage.md` §1.1). A suggestion keeps the change visible and reversible. The counts only let the model suggest; only the user changes the instructions (§12 Q5, decided).
 
 ### 3.4 Cost and cache
 
@@ -159,13 +159,13 @@ The turn's final `metadata` frame already carries `cost: {total, inputCost, outp
 maxCostPerDay:    Optional[Decimal]   USD; null = no budget (today's behaviour)
 spendToday:       Decimal              maintained by the worker
 spendTodayDate:   "YYYY-MM-DD"         in the schedule's own timezone
-budgetHoldUntil:  Optional[ISO]        set while a day's budget is spent (hold, §12 Q2)
+budgetHoldUntil:  Optional[ISO]        set while a day's budget is spent (§12 Q2)
 budgetDaysAtLimit: int                 consecutive days the budget was reached
 ```
 
 **Who has one.** Any personal schedule, standard or watch, may set a budget. One whose interval is under 60 minutes must have one (§4.4). Run now is not counted: the user pressed it and watches it, and its cost is metered and on quota like any turn.
 
-**The day is the schedule's day.** "20 cents a day" means the user's day, so the date is computed in `ScheduledPrompt.timezone`, unlike `runsToday`, which counts UTC days (§12 Q3).
+**The day is the schedule's day.** "20 cents a day" means the user's day, so the date is computed in `ScheduledPrompt.timezone`. `runsToday` stays UTC: it is a runaway guard, not a user number (§12 Q3, decided).
 
 **The worker keeps the count.** After every run and every inbox resume, it adds the run's cost with one conditional `UpdateItem`:
 
@@ -175,12 +175,12 @@ budgetDaysAtLimit: int                 consecutive days the budget was reached
 
 So two concurrent writers at midnight never lose one's cost. It runs beside `record_run_result`'s write. Today that function reads the schedule and then writes it; this change doesn't make it atomic, and doesn't need to.
 
-**Reaching the budget.** When the new `spendToday ≥ maxCostPerDay`, the worker stops the schedule for the day (§12 Q2 decides how) and writes one `schedule_paused` bell row with `reason: "budget"`, the day's spend and the budget.
+**Reaching the budget.** When the new `spendToday ≥ maxCostPerDay`, the worker holds the schedule until its next local midnight (below) and writes one `fyi` `schedule_paused` bell row with `reason: "budget"`, the day's spend, the budget and when it resumes.
 
 **The dispatcher's guard 2b.** The dispatcher already reads the whole schedule from `DueScheduleIndex`, so a guard beside the runaway guard costs nothing:
 
 - It compares `spendToday` (for today's date) with `maxCostPerDay`, and honours `budgetHoldUntil`. It is the backstop for a budget the user lowered below today's spend.
-- **It always re-arms.** A guard that skipped without re-arming would leave the schedule most-overdue, and enough of those would fill every tick's `Limit=20` sweep and starve every other schedule. Over budget, the dispatcher re-arms `nextRunAt` to the hold's end (or pauses, per §12 Q2), with the same conditional `rearm_schedule`, and invokes nothing.
+- **It always re-arms.** A guard that skipped without re-arming would leave the schedule most-overdue, and enough of those would fill every tick's `Limit=20` sweep and starve every other schedule. Over budget, the dispatcher re-arms `nextRunAt` to the hold's end, with the same conditional `rearm_schedule`, and invokes nothing.
 
 **Edits respect the hold.** A `PATCH` that recomputes `nextRunAt` (cadence, hour, timezone) takes the later of the new time and `budgetHoldUntil`. Raising `maxCostPerDay` above today's spend clears `budgetHoldUntil` and recomputes `nextRunAt`, so the schedule runs again today.
 
@@ -191,21 +191,18 @@ So two concurrent writers at midnight never lose one's cost. It runs beside `rec
 **What the budget does not bound:**
 
 - one run in progress, which runs to its end within the harness's 14-minute cap;
-- the sum across a user's schedules, for which the monthly quota is the cap (§12 Q1 asks whether a per-user daily cap is wanted);
+- the sum across a user's schedules, for which the monthly quota is the cap: there is no per-user daily cap (§12 Q1, decided);
 - side calls on standard runs (§4.1).
 
-**How a run past the budget is stopped (§12 Q2).** Two mechanisms, and the developer picks one:
+**How a run past the budget is stopped (§12 Q2, decided: hold until tomorrow).**
 
-| | Pause (the gap spec) | Hold until tomorrow (recommended) |
-|---|---|---|
-| What happens | `pause_schedule(schedule, "budget")`: `paused_error`, off the due index | `budgetHoldUntil` = the schedule's next local midnight, and `nextRunAt` re-armed to the later of that and its next cadence time. It stays `active` |
-| The user | Must press Resume | Does nothing. The schedule resumes tomorrow, and the bell row says when |
-| New machinery | None | Two fields; `rearm_schedule` exists, and the due index wakes it |
-| Risk | A schedule the user forgets stays off | One that hits the budget every day spends it every day. The bound: `budgetDaysAtLimit` counts consecutive days at the limit (reset by a day that ends under it), and at 3 the schedule pauses as on the left |
+- **The hold.** `budgetHoldUntil` is set to the schedule's next local midnight, and `nextRunAt` is re-armed to the later of that and its next cadence time, with the existing conditional `rearm_schedule`. The schedule stays `active`, so the due index wakes it with no new machinery.
+- **The user does nothing.** The schedule resumes tomorrow, and its one `fyi` bell row says when.
+- **The bound.** A schedule that reaches its budget every day would spend it every day. `budgetDaysAtLimit` counts consecutive days at the limit (reset by a day that ends under it), and at 3 the schedule pauses with `pause_schedule(schedule, "budget")`: `paused_error`, off the due index, until the user presses Resume.
 
 ### 4.3 Defaults and the form
 
-- **The default** for a new schedule under 60 minutes is a deployment setting, `SCHEDULE_DEFAULT_MAX_COST_PER_DAY` on app-api (§12 Q1). It is configuration, not a flag.
+- **The default** for a new schedule under 60 minutes is a deployment setting, `SCHEDULE_DEFAULT_MAX_COST_PER_DAY` on app-api, shipped at **$0.50** a day (§12 Q1, decided). It is configuration, not a flag.
 - **The form shows the projection.** The budget field shows "about $X a day at this interval", computed in the SPA from the schedule's recent runs (`costUsd` on its `SCHEDRUN#` rows, median of the last 20) once it has some. Before it has any, it uses a stated estimate of ~6k input tokens a run at the model's catalog rate, labelled as an estimate. No new endpoint: `GET /schedules/{id}/runs` already returns the rows.
 - **Today's spend** shows on the schedule page beside the 24-hour summary: "$0.04 of $0.25 today".
 
@@ -222,7 +219,7 @@ So the guard bounds **spend**, which is what it was for:
 - **Any schedule under 60 minutes must have a budget,** watch or standard. `maxCostPerDay` may not be null there. Create and edit refuse a null with 422, naming the field. The default fills it in, so the user sees a number rather than an error. Existing short-interval schedules get the default once, from a one-time script in PR 4.1, so none is left uncapped.
 - **The short-interval note stays** (`quiet-watcher.md` §3.1), and now quotes the projection: "Every 15 minutes is 96 checks a day, about $0.11 a day on this model".
 - **The budget then covers whatever triage does.** A cheaper quiet run spends less of it; a volatile source spends more. Neither needs a rule of its own.
-- **Is a per-model interval floor needed too?** For example, "no frontier model under an hour". The budget makes it unnecessary for cost, but it is a product choice (§12 Q1).
+- **No per-model interval floor** (§12 Q1, decided). "No frontier model under an hour" isn't needed: the budget bounds the spend whatever the model.
 
 ### 4.5 The runaway guard (fix first, PR 4.0)
 
@@ -262,7 +259,27 @@ The grant's own docstring states the policy as "the platform may act headlessly 
 
 - **Which sign-ins.** Only the web app's. The callback also serves the terminal's device flow and the phone's native exchange, whose sessions never slide on idle (`client = "native"`). Pinning a CLI or phone token would tie scheduled runs to a device the user may revoke from the devices list.
 
-**Signing out may stop scheduled runs.** `POST /auth/logout` revokes the session's Cognito refresh token (`_revoke_refresh_token` in `apis/app_api/auth/bff/routes.py`). The grant holds that same token until a refresh rotates it (`persist_rotated_refresh_token`). So signing out of the pinned session may kill the grant at once, with its `ttl` still weeks away and no warning. That is true today. Re-pinning at sign-in makes the pinned session the newest one, which is the one a user is most likely to sign out of. **To verify on dev before §12 Q9 is answered:** whether Cognito's `RevokeToken` on the session's token also invalidates the grant's rotated one. If it does, the fix belongs in the grant, not here. Options: give the grant its own refresh token from a dedicated sign-in, or have logout warn ("Signing out stops your scheduled runs") and re-pin the grant to another live session.
+**Signing out stops scheduled runs (checked 2026-11-27 in code and config; not yet run live).**
+
+- **The same token.** The BFF app client (`cognito-construct.ts`, the same construct on every deployment) leaves refresh-token rotation off and token revocation on. Read from dev's user pool on 2026-11-27: `RefreshTokenRotation` unset, `EnableTokenRevocation: true`. So a grant stores exactly the refresh token of the session it was pinned from. `persist_rotated_refresh_token` never fires.
+- **Logout revokes it.** `POST /auth/logout` calls Cognito `RevokeToken` on that session's token (`_revoke_refresh_token` in `apis/app_api/auth/bff/routes.py`).
+- **The run fails.** The schedule's next run can't refresh, raises `HeadlessAuthError`, and pauses with `reauth_required`. That is true in prod today, for standard schedules too, for any user who signs out of the session they last enabled from.
+
+**What the user sees is worse than a silent stop.**
+
+1. The bell says "Your schedule stopped until you sign in again". Signing in doesn't fix it, because a sign-in never re-pins the grant.
+2. The grant row still reads `active` with its `ttl` weeks away, so `GET /runs/grant` answers `enabled: true` and `/schedules` hides its **Enable scheduled runs** banner. That banner also promises runs continue "even when you're logged out".
+3. **Resume** re-arms the schedule, and its next run fails the same way.
+
+Only Run now, or revoking and re-enabling the grant, pins a live token again, and nothing tells the user to do either.
+
+**Recommended fix, smallest first** (a recommendation, not built):
+
+1. **Make the failure recoverable.** When a run's refresh is refused, the worker marks the grant `needs_reauth`, so `GET /runs/grant` reads `enabled: false` and the Enable banner comes back. The `reauth_required` bell text then says "Turn scheduled runs back on", linking to `/schedules`. That is a few lines in the worker and the wording, with no change to logout.
+2. **Stop logout from killing it.** Before `RevokeToken`, app-api reads the user's active grant (one Query on `HeadlessGrantUserIndex`). If the grant holds this session's token, logout skips the revocation and tells the user scheduled runs keep going, with a link to turn them off. Revoking the session row still signs the browser out. The grant's token stays alive only as long as the grant, which the user can revoke from `/schedules`.
+3. **The cleaner end state** gives the grant its own refresh token, from a sign-in made for it, so no browser session shares it. That is a design of its own, and the only way the two lifetimes truly separate.
+
+**The live check** (a dev schedule on Haiku 5.5, one run, sign out the pinned session, a second run) is ready to run on the developer's own dev account once they approve it in that session. Its result replaces "not yet run live" above.
 
 This changes what consent means: from "act as me for 30 days after I click Enable" to "act as me while I keep signing in". That is the developer's call.
 
@@ -278,7 +295,7 @@ A vaulted token's expiry can't be read, so a connector can only be found already
 
 The read is one Query on the caller's `SCHEDPROMPT#` items, which `GET /schedules` already makes. `complete_consent` already resumes the caller's KB sync policies the same way, so this follows an existing pattern. This is a fix to slice 0's behaviour, unflagged (§10.2).
 
-**Held: a pre-flight before low-frequency runs (§12 Q10).** For a schedule that runs daily or less often, a check some hours before its run would let the user reconnect the evening before, rather than at 8 a.m. when the run fails. The shape, if the developer wants it:
+**Held: a pre-flight before low-frequency runs (§12 Q10).** For a schedule that runs daily or less often, a check some hours before its run would let the user reconnect the evening before, rather than at 8 a.m. when the run fails. **Decided: held** (§12 Q10). It is built only if data shows `oauth_required` pauses are common; the grant-expiry warning (§5.1) ships regardless. The shape, kept for then:
 
 - **A second entry in `DueScheduleIndex`** under its own partition value (`GSI3_PK = PREFLIGHTDUE`, `GSI3_SK = {preflightAt}#{scheduleId}`), on a small `SCHEDPREFLIGHT#{scheduleId}` item. It is written when the dispatcher re-arms a schedule whose interval is 6 hours or more, at `nextRunAt − 12 h`. No new index, and no new resource.
 - **The dispatcher** queries that partition on each tick beside the due one, and invokes the worker with `{kind: "connection_preflight", userId, scheduleId}`.
@@ -297,6 +314,7 @@ Notification preferences are one item on the **user-settings table**, beside `SE
 PK = USER#{userId}   SK = NOTIFY_PREFS
 timezone:   IANA
 quietHours: {start: "21:00", end: "07:00", days?: [0..6]} | null
+nowBreaksThrough: bool                                  default true: `now` items ignore quiet hours
 channels:   {now: [...], today: [...], fyi: [...]}   each a subset of ["bell", "push"]
 version, updatedAt
 ```
@@ -310,7 +328,7 @@ version, updatedAt
 The bell is pull-only. It refreshes when it opens and when the tab regains focus, and nothing polls while a tab is hidden. So before Push there is no channel for quiet hours to hold back. Slice 4 does this much:
 
 - **Urgency orders and badges the bell** (it only prefixes "Urgent —" today). `now` rows sort first and always count toward the badge. `fyi` rows count toward the badge only when the user's `fyi` channels include `bell`.
-- **Quiet hours are stored.** Nothing acts on them until slice 3, whose sender reads this item. Whether the Settings form ships now, marked "Applies to push notifications", or with Push is §12 Q6. A `now` item sent in quiet hours is the sender's decision, not this slice's (§12 Q6 asks whether `now` breaks through).
+- **Quiet hours are stored, with no form yet.** Nothing acts on them until slice 3, whose sender reads this item, and the Settings form ships with Push in slice 3, so no setting ships that visibly does nothing (§12 Q6, decided). A `now` item breaks through quiet hours unless the user turns that off (`nowBreaksThrough`, §6.1).
 - **Bell rows this slice writes carry an urgency:**
 
   | Row | Urgency |
@@ -321,7 +339,7 @@ The bell is pull-only. It refreshes when it opens and when the tab regains focus
 
 **Considered and not done:** firing browser notifications for `agent_*` rows while a tab is hidden, as handoffs do. Handoff notifications fire from the live stream in the tab that started the handoff. An agent item has no stream in any tab, so it would need a poll while hidden, which is what Web Push (slice 3) replaces.
 
-**Per user or per job (§12 Q6).** This design is per user: a person has one do-not-disturb window. A job's control is the urgency its items carry. A per-job override can come later as a field on the schedule, read by the same sender.
+**Per user, not per job (§12 Q6, decided).** A person has one do-not-disturb window: a person has one do-not-disturb window. A job's control is the urgency its items carry. A per-job override can come later as a field on the schedule, read by the same sender.
 
 ## 7. The action audit (G9)
 
@@ -329,7 +347,7 @@ The bell is pull-only. It refreshes when it opens and when the tab regains focus
 
 **Three classes of call.** Every tool call an unattended run makes (§7.2 defines one) falls into one of three classes:
 
-| Class | Test | Audited | Keeps a watch run from being quiet (§7.3) | Asks first, if §12 Q7 says so (§7.5) |
+| Class | Test | Audited | Keeps a watch run from being quiet (§7.3) | A watch run asks first (§7.5) |
 |---|---|---|---|---|
 | `read_only` | `runs_in_parallel` (`agents/main_agent/core/tool_concurrency.py`): `PARALLEL_SAFE_TOOLS`, `___WebSearch`, or MCP `readOnlyHint` without `destructiveHint`. The same definition triage's probe uses | No | No | No |
 | `write` | **Positive evidence**: MCP `destructiveHint`; the catalog's `needs_approval`; the skill-authoring writes; or a new optional catalog marker `writes: true` that an admin sets on a tool | Yes | Yes | Yes |
@@ -351,7 +369,7 @@ class: "write" | "unclassified",  why: "destructive_hint" | "needs_approval" | "
 approval: "not_required" | "approved",  approvedVia?: "inbox" | "conversation",  approvingRunId?,
 inputSha256, inputChars,
 outcome: "started" | "ok" | "error",
-startedAt, finishedAt?, rounds, ttl (§12 Q8)
+startedAt, finishedAt?, rounds, ttl (365 days, §12 Q8)
 ```
 
 - **Keyed by the call, so it is written once.** The sort key is the run and the tool use, and the put is conditional on the row not existing. An MCP form's replay of the same call (`mcp_elicitation`) or a resume of it finds the row and updates `rounds` and `outcome` rather than adding a second.
@@ -380,7 +398,7 @@ startedAt, finishedAt?, rounds, ttl (§12 Q8)
 
 - **Interactive turns: none.** The inert check is one dictionary lookup per tool call, with no I/O. `test_turn_path_io_inventory` stays as is, and the PR adds a test that an interactive turn writes nothing.
 - **Unattended runs: one `PutItem` before each audited call** (about 5–15 ms, measured in the PR). Nobody waits on a headless run's first token. Read-only calls, including every probe replay, pay nothing.
-- **One attended case pays it:** a user who answers a scheduled run's approval **in its conversation**. That resume's first token comes after the approved call, so the `PutItem` is on its path. It applies only to resumes of unattended pauses, never to an ordinary turn. CLAUDE.md requires the developer to accept a measured addition there explicitly (§12 Q14).
+- **One attended case pays it:** a user who answers a scheduled run's approval **in its conversation**. That resume's first token comes after the approved call, so the `PutItem` is on its path. It applies only to resumes of unattended pauses, never to an ordinary turn. CLAUDE.md requires the developer to accept a measured addition there explicitly. Accepted on 2026-11-27 (§12 Q14); the PR that builds it states the measured number.
 - **Nothing reaches the model** beyond the error on a failed write.
 
 ### 7.3 A run that wrote is never quiet
@@ -398,11 +416,11 @@ An `unclassified` call changes no outcome. A quiet run that made one is soft-del
 ### 7.4 Who sees it
 
 - **The owner,** on the schedule page: **Actions**, newest first, from `GET /schedules/{id}/actions` (Query on `SessionLookupIndex`, `GSI_PK = RUNACTS#{userId}#{scheduleId}`, at most 50). Each row reads "Ran *send_message* · approved in the bell · Tue 9:15 AM" and links to the run's conversation. Unclassified calls read "Ran *list_files* (not marked read-only)".
-- **Admins** (§12 Q8): the recommendation is ids and counts only, under the existing audit console's scope, and never the conversation.
+- **Admins** see ids and counts only, under the existing audit console's scope, and never the conversation (§12 Q8, decided). Rows are kept 365 days, matching `apis/shared/audit`.
 
-### 7.5 Writes without asking (§12 Q7)
+### 7.5 Writes without asking (§12 Q7, decided)
 
-The audit records unattended writes. It doesn't decide whether they may happen. Today a headless run asks first only when an admin flagged the tool `needs_approval`, or for the skill-authoring writes. The developer decides whether a watcher may write without asking. If not:
+The audit records unattended writes. It doesn't decide whether they may happen. Today a headless run asks first only when an admin flagged the tool `needs_approval`, or for the skill-authoring writes. **Decided:** a **watch** run asks before every `write`-class call unless the schedule lists the tool in `actWithoutAsking`. `unclassified` calls are audited but not gated, and standard schedules are audit only, with no new pauses, since a digest that files a document each morning would otherwise stop daily.
 
 - **The gate.** An approval gate on watch runs turns any `write`-class call that no gate already pauses into an approval pause: slice 2's path, unchanged downstream. The gate is a `BeforeToolCallEvent` hook beside `MCPExternalApprovalHook`, built only when the request or snapshot is an unattended watch run. It raises no I/O, and it skips any call another gate already pauses, because Strands refuses two interrupts with one name and runs every `Before` callback either way.
 - **The exemption.** The schedule may list tools in a new `actWithoutAsking` (≤ 20 entries), set in the form. Each entry names one tool on one server (`{catalogId}/{toolName}`), never a whole server, so allowing a mail connector's `create_draft` never allows its `send` or `delete`. Entries are validated against the tools the user may use (RBAC), not `enabledTools`, which may be null.
@@ -415,7 +433,7 @@ A watch run's calls are turns, and must stay turns, or the release ledger would 
 
 - **Cost rows gain two attributes.** On a headless session, the Runtime's `store_message_metadata` adds `runTrigger` (from the request's `run_trigger`) and `runMode` (`watch` when set). Ids only, no new GSI: the existing admin queries already read the rows, and project these two.
 - **`/admin/costs` gains an *Unattended* breakdown:** spend and calls by `runTrigger` × `runMode`, with the tier 2 decider (`callKind: watch_triage`, triage §4.2) beside them. The ledger rollup (`ledger_rollups.py`) adds `unattended.<trigger>` counters to the version row, next to `callKind.<kind>`, so a release readout can show and subtract them.
-- **The per-turn KPIs are unchanged for now.** At scale, watch turns could outnumber interactive ones and pull per-turn cost and TTFT toward a headless profile. Whether they leave the turn KPIs is a readout decision (§12 Q12), which the new counters make possible.
+- **The per-turn KPIs are unchanged for now.** At scale, watch turns could outnumber interactive ones and pull per-turn cost and TTFT toward a headless profile. They stay in the turn KPIs for now, beside the new `unattended.<trigger>` counters, and the question is revisited at the first readout with watchers at scale (§12 Q12, decided).
 
 ## 9. Where each check runs, and the cost contract
 
@@ -472,7 +490,7 @@ The SPA's halves are behind `features.proactiveRuns`.
 | Budgets, standing instructions, feedback | Part of the proactive-runs **feature switch** | Each extends a watcher. A deployment that wants watchers wants these |
 | `SCHEDULE_DEFAULT_MAX_COST_PER_DAY` | **Configuration** | A number, not an on/off |
 | Notification preferences | Read by `PUSH_NOTIFICATIONS_ENABLED`'s sender (slice 3) | Inert without a channel |
-| Action audit | **Governance: should not be switchable once proven** | §12 Q11 asks whether it ships ahead of the rest, to reach prod's existing scheduled runs |
+| Action audit | A **rollout switch** of its own, after the dev readout: `HEADLESS_ACTION_AUDIT_ENABLED`, default on, `=false` opts out (§12 Q11, decided) | It ships ahead of the rest of slice 4, so prod's existing scheduled runs and Run now get it before proactive runs is promoted. It retires on the default condition, and its PR adds a line to #1422 |
 
 ### 10.2 Unflagged fixes
 
@@ -484,14 +502,14 @@ The SPA's halves are behind `features.proactiveRuns`.
 | PR | Scope | What it proves on dev |
 |---|---|---|
 | **4.0: runaway ceiling** (unflagged) | Guard 2 uses `max(max_runs_per_day, cadence_ceiling)` in the dispatcher; the worker skips a schedule that isn't `active`; a unit test per cadence | A 15-minute dev watcher runs past 24 in a UTC day without pausing, a forced re-arm loop still trips the guard, and a schedule paused after dispatch doesn't run |
-| **4.1: budget** | Harness `cost_usd` from the final `metadata` frame; `costUsd` and `costPending` on `SCHEDRUN#` (resumes add theirs) and the next run's reconcile; `maxCostPerDay`, `spendToday`, `spendTodayDate`, `budgetHoldUntil`, `budgetDaysAtLimit`; the worker's conditional count; the trip (per §12 Q2); dispatcher guard 2b, which always re-arms; edits that respect the hold; the short-interval rule for any schedule, and the one-time default for existing ones; `SCHEDULE_DEFAULT_MAX_COST_PER_DAY`; the bell text for `reason: budget` | A watcher with a budget of a few runs' cost stops after that many runs, with one bell row, and resumes after midnight (or stays paused). Each watch run's `costUsd` equals the sum of its session's chat-call `C#` rows to the cent, and a timed-out run's is filled in at the next run. A null budget under 60 minutes is refused. Twenty over-budget schedules don't starve a twenty-first |
-| **4.2: action audit** | `run_id` and `run_trigger` on `InvocationRequest` and `PausedTurnSnapshot`; the three classes and the catalog `writes` marker; `HeadlessActionAudit` (middleware, fail-closed, off the loop, idempotent per call); `RunAuditRecorder.record_action`; `audited` on `tool_result`; never-quiet after a `write`; `writeCount`; `GET /schedules/{id}/actions`; the interactive no-write test; the measured `PutItem` (§12 Q14); §7.5's gate if §12 Q7 says so | A watch run approved from the bell writes one row (`approved`, `inbox`) before the call and its outcome after, and the pass that paused wrote none. One approved in the conversation writes `approvedVia: conversation`. An MCP form's replay keeps one row. A run that made a `write` and reported `nothing_new` keeps its conversation; one that made only `unclassified` calls stays quiet. In tests, a failed audit write returns the error without calling the tool, and an interactive turn writes nothing |
+| **4.1: budget** | Harness `cost_usd` from the final `metadata` frame; `costUsd` and `costPending` on `SCHEDRUN#` (resumes add theirs) and the next run's reconcile; `maxCostPerDay`, `spendToday`, `spendTodayDate`, `budgetHoldUntil`, `budgetDaysAtLimit`; the worker's conditional count; the hold until local midnight and the pause after 3 days; dispatcher guard 2b, which always re-arms; edits that respect the hold; the short-interval rule for any schedule, and the one-time default for existing ones; `SCHEDULE_DEFAULT_MAX_COST_PER_DAY`; the bell text for `reason: budget` | A watcher with a budget of a few runs' cost stops after that many runs, with one bell row, and resumes after local midnight, and on a third day at the limit it pauses. Each watch run's `costUsd` equals the sum of its session's chat-call `C#` rows to the cent, and a timed-out run's is filled in at the next run. A null budget under 60 minutes is refused. Twenty over-budget schedules don't starve a twenty-first |
+| **4.2: action audit** | `run_id` and `run_trigger` on `InvocationRequest` and `PausedTurnSnapshot`; the three classes and the catalog `writes` marker; `HeadlessActionAudit` (middleware, fail-closed, off the loop, idempotent per call); `RunAuditRecorder.record_action`; `audited` on `tool_result`; never-quiet after a `write`; `writeCount`; `GET /schedules/{id}/actions`; the interactive no-write test; the measured `PutItem` (§12 Q14); §7.5's watch-run gate and `actWithoutAsking` | A watch run approved from the bell writes one row (`approved`, `inbox`) before the call and its outcome after, and the pass that paused wrote none. One approved in the conversation writes `approvedVia: conversation`. An MCP form's replay keeps one row. A run that made a `write` and reported `nothing_new` keeps its conversation; one that made only `unclassified` calls stays quiet. In tests, a failed audit write returns the error without calling the tool, and an interactive turn writes nothing |
 | **4.3: connection health** | `grant_expires_at` and `grant_issued_at` on `RunResult`; the warning rule and `expiryWarnedFor`; the `connection_expiring` kind, which resolves only when `expiresAt` clears the window, and its Sign in fallback; the `/schedules` banner; reconnect-resumes in `complete_consent` (exact provider match, budget and project rules); the logout check (§5.2), run first; re-pin at sign-in if §12 Q9 says so | A grant backdated to expire in 2 days produces one bell row, and a second run produces none. Renew from an old session leaves the row asking for a sign-in; renew after a fresh sign-in resolves it. Reconnecting `github` resumes the schedule it paused and not one paused for `github-enterprise`. The logout check's answer is recorded here |
 | **4.4: instructions and feedback** | `standingInstructions` and `instructionsHash` with its `skip_reason` row; `<standing_instructions>`; `report.items[].source` and `state.instructionSuggestion` (digest pin, spec tokens measured and stated); the `source` normaliser; `SCHEDFEEDBACK#` and the transactional `feedback` route; the `<watch_state>` summary; `agent_suggestion`, `pendingSuggestion` and accept (with `suggestionId`) or dismiss | A planted run of 9 Not useful marks on one source produces one suggestion within the seven-day rule. Accept changes the field, and the next run is full. An accept for a replaced suggestion gets 409. Feedback during a run doesn't fail that run's state save, and Start over keeps the counts and the pending suggestion |
 | **4.5: notification preferences** | `NOTIFY_PREFS` and its routes; the bell's urgency order and badge rule | The bell orders `now` first, and `fyi` rows stop raising the badge when the user says so |
 | **4.6: the web app** | The budget field with its projection and today's spend; standing instructions in the form; Not useful and Useful on `agent_item` rows; the suggestion review dialog; the Actions list; the Connections warning banner with Renew; notification preferences in Settings; `/admin/costs` *Unattended* | Each surface in the in-app browser, light and dark, at phone width |
 | **4.7: unattended spend** | `runTrigger` and `runMode` on `C#` rows; the admin breakdown; `unattended.<trigger>` ledger counters | A day of dev watchers shows under *Unattended*, and the ledger's turn KPIs are unchanged |
-| **Dev readout** | Seven days of the triage shadow watchers with budgets and the audit on: spend per watcher against `C#` sums, budget trips, suggestions raised and accepted, actions recorded, warnings sent | Decides whether the connector pre-flight (§5.3) is worth building, and whether the audit ships ahead (§12 Q11) |
+| **Dev readout** | Seven days of the triage shadow watchers with budgets and the audit on: spend per watcher against `C#` sums, budget trips, suggestions raised and accepted, actions recorded, warnings sent | Decides whether the connector pre-flight (§5.3) is worth building (§12 Q10), and starts the audit's own rollout switch (§12 Q11) |
 
 4.0 can merge before anyone reads the rest of this spec. 4.1 to 4.5 are independent of each other, with two exceptions: 4.2's `run_trigger` is what 4.7 tags rows with, and 4.6 follows the backend PR of each surface.
 
@@ -506,35 +524,22 @@ The SPA's halves are behind `features.proactiveRuns`.
 
 The PlatformStack resource count (`docs/specs/platform-stack-resource-budget.md`) is unchanged. The held connector pre-flight (§5.3) would also add no resource.
 
-## 12. Open questions for the developer
+## 12. Decisions
 
-Each has a recommendation. None is decided here.
+The developer settled these on 2026-11-27, taking the recommendation on each. Q9 stays open until the live logout check reports.
 
-1. **Default budget, the interval floor, and a per-user cap.** What should `SCHEDULE_DEFAULT_MAX_COST_PER_DAY` ship as? Is a budget required on any schedule under 60 minutes? Should frontier models also get a minimum interval? Is a per-user daily cap across all schedules wanted, beyond the monthly quota?
-   **Recommendation:** ship **$0.50** a day. That is about 4.5× a Haiku 5.5 15-minute watcher ($0.11) and below a Haiku 4.5 one ($0.73), so a user who picks the expensive model meets the budget the first day and sees why. Require a budget on any schedule under 60 minutes, watch or standard. Add no per-model floor and no per-user daily cap: the budget bounds each schedule, and the monthly quota bounds the user.
-2. **A run past the budget: pause or hold until tomorrow?**
-   **Recommendation:** hold until the schedule's next local midnight, with one `fyi` bell row, and pause after 3 consecutive days at budget (§4.2).
-3. **The budget's day: the schedule's timezone or UTC?**
-   **Recommendation:** the schedule's timezone, since a user reads "a day" as theirs. `runsToday` stays UTC, as it is a runaway guard, not a user number.
-4. **Where standing instructions live.** A field on the schedule (§3.1), a Memory Space page (the gap spec), or per user for all watchers?
-   **Recommendation:** the schedule field now. Move to a Memory Space binding when personal Memory Spaces reach runs, which is its own work in `user-markdown-memory.md`.
-5. **May the model act on feedback counts by itself,** or only suggest an instruction change (§3.3)?
-   **Recommendation:** only suggest. The counts are context; the instructions are what change behaviour, and only the user changes those.
-6. **Quiet hours: per user or per job?** Does a `now` item break through them, and should the Settings form ship in this slice or with Push?
-   **Recommendation:** per user. `now` breaks through, and the user can turn that off. Ship the data and the bell rule in slice 4, and the quiet-hours form with Push in slice 3, so no setting ships that visibly does nothing.
-7. **May a watcher write without asking?** Today only admin-flagged tools ask (§7.5).
-   **Recommendation:** a **watch** run asks before every `write`-class call (positive evidence, §7.1) unless the schedule lists the tool in `actWithoutAsking`. `unclassified` calls are audited but not gated. Watchers are for noticing, and a write the user didn't see coming is the trust failure this slice exists to prevent. Standard schedules: audit only, no new pauses, since a digest that files a document each morning would otherwise stop daily.
-8. **Who may see the action audit, and for how long?**
-   **Recommendation:** the owner, in full, on the schedule page. Admins see ids and counts only, through the existing audit console's scope, and never the conversation. Keep rows **365 days**, matching `apis/shared/audit`'s retention.
-9. **Re-pin the headless grant at sign-in** (§5.2)?
-   **Recommendation:** yes, for web sign-ins only and only for users with an active grant, **after** the logout check in §5.2 is run on dev. If signing out of the pinned session kills the grant, fix that first (the grant's own token, or a logout that warns and re-pins), because re-pinning at sign-in would make it more likely.
-10. **Build the connector pre-flight** (§5.3), or rely on the run-time pause plus reconnect-resumes?
-    **Recommendation:** hold it. Build it only if the dev readout or prod's `SCHEDRUN#` rows show `oauth_required` pauses are common on low-frequency schedules.
-11. **Ship the action audit ahead of the rest?** Prod runs standard scheduled runs today, with the proactive flag off, so they get no audit until proactive runs is promoted.
-    **Recommendation:** after the dev readout, give the audit its own default-on **rollout switch** (`HEADLESS_ACTION_AUDIT_ENABLED=false` to opt out), so it reaches prod's scheduled runs and Run now before the rest of slice 4. Retire the switch on the default condition (#1422).
-12. **Watch turns in the release ledger's per-turn KPIs.** Keep them, or move them to their own segment?
-    **Recommendation:** keep them for now, add the `unattended.<trigger>` counters (§8), and decide from the first readout that has watchers at scale.
-13. **The runaway ceiling (PR 4.0): merge it now,** before the triage shadow's 7-day readout starts?
-    **Recommendation:** yes. Without it, every shadow watcher pauses about 6 hours into each UTC day.
-14. **One measured `PutItem` on an attended resume.** When a user answers a scheduled run's approval in its conversation, the audit row is written before the approved call, which is before that resume's first token (§7.2). It is about 5–15 ms, only on resumes of unattended pauses, never on an ordinary turn. CLAUDE.md asks you to accept a measured addition there explicitly.
-    **Recommendation:** accept it, with the PR's measured number. The alternative, no row for an approval given in the conversation, leaves the one approval path with the most context unrecorded.
+1. **Default budget, the interval floor, and a per-user cap.** **Decided (Phil, 2026-11-27).** `SCHEDULE_DEFAULT_MAX_COST_PER_DAY` ships at **$0.50** a day. That is about 4.5× a Haiku 5.5 15-minute watcher ($0.11) and below a Haiku 4.5 one ($0.73). A budget is required on any schedule under 60 minutes, watch or standard. There is no per-model interval floor and no per-user daily cap: the budget bounds each schedule, and the monthly quota bounds the user (§4.2–§4.4).
+2. **A run past the budget.** **Decided (Phil, 2026-11-27).** Hold until the schedule's next local midnight, with one `fyi` bell row, and pause after 3 consecutive days at the budget (§4.2).
+3. **The budget's day.** **Decided (Phil, 2026-11-27).** The schedule's timezone. `runsToday` stays UTC, as it is a runaway guard, not a user number (§4.2).
+4. **Where standing instructions live.** **Decided (Phil, 2026-11-27).** A field on the schedule now (§3.1). They move to a Memory Space binding when personal Memory Spaces reach runs, which is its own work in `user-markdown-memory.md`.
+5. **Feedback counts.** **Decided (Phil, 2026-11-27).** They only let the model suggest an instruction change. Only the user changes instructions (§3.3).
+6. **Quiet hours.** **Decided (Phil, 2026-11-27).** Per user, and `now` breaks through, which the user can turn off (`nowBreaksThrough`). Slice 4 ships the data and the bell rule; the Settings form ships with Push in slice 3 (§6).
+7. **Writes without asking.** **Decided (Phil, 2026-11-27).** A **watch** run asks before every `write`-class call unless the schedule lists the tool in `actWithoutAsking`. `unclassified` calls are audited, not gated. Standard schedules are audit only (§7.5).
+8. **Who sees the action audit, and for how long.** **Decided (Phil, 2026-11-27).** The owner, in full, on the schedule page. Admins see ids and counts only, through the existing audit console's scope, and never the conversation. Rows are kept **365 days**, matching `apis/shared/audit`'s retention (§7.4).
+9. **Re-pin the headless grant at sign-in** (§5.2). **Open.** The code and config check (§5.2) found that signing out of the pinned session kills the grant today, in prod as well, and that the user is then told to do something that doesn't fix it. The live check on dev is pending the developer's approval in the session that runs it.
+   **Recommendation, updated with that finding:** fix the failure first. Mark a refused grant `needs_reauth` so the Enable banner returns and the bell says "Turn scheduled runs back on" (§5.2 fix 1), and stop logout from revoking the grant's token (fix 2). Then re-pin at web sign-ins for users with an active grant. Re-pinning alone would make the newest session, the one a user is most likely to sign out of, the pinned one.
+10. **The connector pre-flight.** **Decided (Phil, 2026-11-27).** Held. It is built only if data shows `oauth_required` pauses are common. The grant-expiry warning (§5.1) ships regardless (§5.3).
+11. **Ship the action audit ahead of the rest.** **Decided (Phil, 2026-11-27).** After the dev readout, the audit gets its own default-on **rollout switch** (`HEADLESS_ACTION_AUDIT_ENABLED=false` opts out), retired on the default condition. The PR that adds it adds a line to tracking issue #1422 (§10.1).
+12. **Watch turns in the release ledger's per-turn KPIs.** **Decided (Phil, 2026-11-27).** Keep them, add the `unattended.<trigger>` counters (§8), and revisit at the first readout with watchers at scale.
+13. **The runaway ceiling (PR 4.0).** **Decided (Phil, 2026-11-27).** Done: #2495 merged, and its dev check passed on 2026-11-27 (#2494).
+14. **One measured `PutItem` on an attended resume.** **Decided (Phil, 2026-11-27).** Accepted. It is one `PutItem` before the first token, only on a resume of an unattended pause answered in its conversation (§7.2). The PR that builds it must state the measured number.
