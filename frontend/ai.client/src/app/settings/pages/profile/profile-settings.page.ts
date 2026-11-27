@@ -7,11 +7,12 @@ import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroDocument, heroDocumentText, heroChevronRight } from '@ng-icons/heroicons/outline';
 import { UserService } from '../../../auth/user.service';
+import { SignedInDevicesComponent } from './signed-in-devices.component';
 
 @Component({
   selector: 'app-profile-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, NgIcon],
+  imports: [RouterLink, NgIcon, SignedInDevicesComponent],
   providers: [
     provideIcons({ heroDocument, heroDocumentText, heroChevronRight }),
   ],
@@ -122,6 +123,8 @@ import { UserService } from '../../../auth/user.service';
           <ng-icon name="heroChevronRight" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" />
         </a>
       </div>
+
+      <app-signed-in-devices />
     </div>
   `,
 })
