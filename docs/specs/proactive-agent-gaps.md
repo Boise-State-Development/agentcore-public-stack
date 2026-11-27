@@ -156,6 +156,8 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 
 ### G7 — Standing instructions and learning from dismissals
 
+**Build plan:** `docs/specs/proactive-trust.md` (slice 4). It corrects this section where the code moved: standing instructions go on the schedule, because Memory Spaces reach only project runs today; a connector's expiry can't be read from the vault, so only the grant gets an "expires in N days" warning; a run's cost comes from its final `metadata` frame, because `C#` rows carry no `runId`; and the short-interval guard is a budget, because triage's tier 1 needs no model.
+
 **Gap.** Duet's own stated failure mode is misjudging urgency. Without a way to say "always tell me about X, never Y, not after 6pm" and without learning from what the user dismisses, a watcher either nags or misses things.
 
 **Proposed shape.**
@@ -165,6 +167,8 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 - **Feedback** from G4 actions is aggregated per job into the job state (G1) as counts by source and sender, e.g. "dismissed 9 of the last 10 from this sender". The triage prompt gets a bounded summary, never the raw history.
 
 ### G8 — Connection health as a first-class signal
+
+**Build plan:** `docs/specs/proactive-trust.md` (slice 4), with the corrections noted under G7.
 
 **Gap.** A background agent fails silently when it loses access, and the user finds out only when they notice it went quiet. Three things lapse:
 
@@ -179,6 +183,8 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 - G6 pushes the `now`-urgency subset.
 
 ### G9 — Budgets and governance for acting alone
+
+**Build plan:** `docs/specs/proactive-trust.md` (slice 4), with the corrections noted under G7.
 
 **Gap.** Quota is monthly and per user. A watcher has no ceiling of its own, and F6a audits runs, not actions.
 
@@ -229,15 +235,13 @@ Rules for the web app half:
 
 ## 4. Sequencing
 
-| Slice | Gaps | Delivers | Depends on |
-|---|---|---|---|
 | Slice | Gaps | Delivers | Web app half (same slice) | Depends on |
 |---|---|---|---|---|
 | **0 — Paused jobs say so** (built) | G4 (`schedule_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner | The bell's text for `schedule_paused`, linking to the schedule | Nothing. Small, and worth doing alone |
 | **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Watcher fields in the schedule form, run history with quiet runs, job state view, `agent_item` in the bell | Slice 0 |
 | **2 — Answer from anywhere** (built) | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Approve, Decline and answer in the bell | Slice 1's inbox kinds |
 | **3 — Push** | G6, plus the iOS app's inbox and notification actions | `now` items reach a closed tab and a locked phone; Approve works from the notification after re-auth | Web Push: service worker, opt-in in Settings | Slice 2; iOS read-only conversations; `native-app-auth.md` PR 3 (devices) |
-| **4 — Trust** | G7, G8 pre-flight, G9 | Standing instructions, quiet hours, budgets, action audit | Quiet hours and channel rules in Settings, the Connections warning, the budget field, admin spend by `callKind` | Slice 1 |
+| **4 — Trust** (planned: `proactive-trust.md`) | G7, G8 pre-flight, G9 | Standing instructions, quiet hours, budgets, action audit | Quiet hours and channel rules in Settings, the Connections warning, the budget field, admin spend by `callKind` | Slice 1 |
 | **5 — Push triggers** | G3 step 2 | Near-real-time reaction for connectors that support it | Connecting a trigger in the schedule form | Slice 1 |
 
 Slices 1–4 are each one feature, gated by `PROACTIVE_RUNS_ENABLED` while in development. Slice 3's switch (`PUSH_NOTIFICATIONS_ENABLED`) and slice 5's per-source switches are permanent feature switches.
