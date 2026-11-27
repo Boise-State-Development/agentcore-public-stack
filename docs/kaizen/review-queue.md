@@ -5,6 +5,129 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-27] Get the nightly green: clear the orphaned sandbox VPCs, sweep them in teardown, and replace the `held_bytes` wall-clock assertion
+- **Source**: research/2026-11-27.md ▸ Top 5 #1; nightly runs 11-21, 11-23 → 11-27; read-only `describe-vpcs` on dev; PR #2498 ("No nightly eval run has published since 2026-11-23")
+- **Surface**: infrastructure + CI (`.github/workflows/nightly-deploy-pipeline.yml` teardown; the code-sandbox VPC in `code-interpreter-construct.ts`) + backend tests (`tests/apis/shared/files/test_held_bytes.py:50-68`)
+- **Effort × Impact**: L–M × H
+- **Subtracts**: yes: a wall-clock bound in the suite (`per_call_ms < 1.0`, failing under coverage every night), and a VPC cleanup that would otherwise recur after every failed teardown
+- **Unlocks**:
+  - nightly evals publishing again, for the efficiency review's quality pillar and the 1.41.0 release readout
+- **Notes**: the deploy fails `CREATE_FAILED AWS::EC2::VPC … maximum number of VPCs has been reached` from 11-24. The dev account holds six VPCs, two of them `nightly-develop-code-sandbox-vpc`, tagged with two `nightly-develop-PlatformStack` stack ids that no longer exist, and neither has an ENI left. Hypothesis: since PR 2245 a stack makes two VPCs, and the teardown deletes the stack but leaves the sandbox VPC. Deleting the two orphans is an ops step that needs a human's go-ahead.
+- **Status**: open
+
+### [2026-11-27] Strands bump to 1.67.0
+- **Source**: research/2026-11-27.md ▸ Top 5 #2; scoping/strands-1-67-0-readout.md
+- **Surface**: backend (`backend/pyproject.toml`, `uv.lock`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: blank completed turns on a `tool_use` stop with no `toolUse` block (#6218 now retries, then raises). `sort_tools=True` in place of our own tool ordering is a later, deliberate follow-up
+- **Unlocks**:
+  - dynamic tool loading (#5699) and `MCPClient(auto_reconnect=True)` (#5297) become reachable options
+- **Notes**: no blocking gate. The PR owes the golden-request test (not run here: the main checkout's venv is stale), `test_tool_config_order.py`, the full suite, a #6218 test (`stream_error`, metered retry), the `ModelProxy` benchmark, one catalog read for a Mantle GPT-5.6/6 row (#6291), and the dev smoke resume rows.
+- **Status**: open
+
+### [2026-11-27] Re-target the hosted FastMCP servers at exactly 4.2.6, with listen streams off (supersedes [2026-11-20] "Move … to 4.2.x")
+- **Source**: research/2026-11-27.md ▸ Top 5 #3; https://github.com/PrefectHQ/fastmcp/releases/tag/v4.2.5, /v4.2.4, /v4.2.6
+- **Surface**: external MCP server repos (Lambda behind Gateway); a note in `docs/specs/mcp-elicitation.md`
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: the tolerant multi-select normaliser branch, and the 11-20 item this replaces
+- **Notes**: 4.2.5 serves `subscriptions/listen` by default and warns serverless hosts. Set `FASTMCP_ENABLE_SUBSCRIPTIONS_LISTEN=false` before import. 4.2.4 is the floor for the OAuth proxy fix (GHSA-78c8-3jhx-5mg7). 4.2.6 drops Authlib as a dependency, so grep the servers for direct `authlib` imports.
+- **Status**: open
+
+### [2026-11-27] Measure Strands' dynamic tool loading (stub mode) as the first arm of the cache-stable tool search note
+- **Source**: research/2026-11-27.md ▸ Top 5 #4; harness-sdk#5699 (python/v1.66.0); [2026-11-20] "Design note: cache-stable tool search"; opencode #66465
+- **Surface**: backend (spike: `agents/main_agent/core/agent_factory.py`, a script under `backend/scripts/`)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes, if adopted: the tool-search mechanism the design note would otherwise have us write
+- **Unlocks**:
+  - users with many MCP servers get a constant, cacheable `toolConfig`
+  - an MCP tool-list change no longer rewrites the prefix for every session
+- **Notes**: after the bump. `BedrockModel` gets stub mode (name, description, open schema, `load_tools`); native `defer_loading` needs `AnthropicModel`; `strict_tools` models get every spec in full. Measure `toolConfig` tokens, cache reads across an MCP list change, and the first-use round. Check it works without the rest of the Strands context manager.
+- **Status**: open
+
+### [2026-11-27] Audit the per-turn text that isn't persisted for prefix drift ahead of the message cachePoint
+- **Source**: research/2026-11-27.md ▸ Top 5 #5; opencode #65788; PR #2498 ($55 `partial_miss` over 28 days)
+- **Surface**: backend (`apis/shared/assistants/kb_readiness.py`, the member note, `<watch_state>`, `apply_turn_prompt_extras`; a two-turn test beside `test_bedrock_golden_requests.py`)
+- **Effort × Impact**: L × M
+- **Subtracts**: no. It's an addition, justified because it turns a silent cost class into a failing test
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md §9 Q5 (harness-sdk#6088 merged)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 1; https://github.com/strands-agents/harness-sdk/pull/6088
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "the SDK side is still moving (harness-sdk#6088 is open, `PresetOptions` is labelled `api/needs-review`)" → "the SDK side is still moving (`PresetOptions` is labelled `api/needs-review`; harness-sdk#6088, the harness adopting the vended `subagent`, merged 2026-11-20 and shipped in 1.67.0)"
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md §11.4 G3 (prompt steps built)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 2; `151790879`, `bb63f5c4e`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "Prompt steps are being built as that side call (§21.3 there)." → "Prompt steps are built as that side call and dev-validated (2026-11-22, behind `PROMPT_STEPS_ENABLED`, `workflow-designer.md` §21)."
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md §11.4 G1 (checklist steps built)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 3; `ef3554b70`, `a0837f01b`, `8227e3505`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "§22 plans checklist steps" → "checklist steps (`workflow-designer.md` §22, built and dev-validated behind `CHECKLIST_STEPS_ENABLED`) run several field sets on one step"
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md §11.4 G4 (`run_code` runs skill scripts)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 4; `2dfc2a842`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "they run only under the Word tools today (`WORD_SKILL_SCRIPTS_ENABLED`)." → "they run under the Word tools (`WORD_SKILL_SCRIPTS_ENABLED`) and, since 2026-11-21, `run_code` (`CODE_SANDBOX_ENABLED`), with LibreOffice behind `CODE_SANDBOX_OFFICE_ENABLED`."
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md §7 and §10 ("No measured numbers yet")
+- **Source**: research/2026-11-27.md ▸ Spec sync row 5; `workflow-runs.md` §19.1, `workflow-designer.md` §21.1
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: §7 → "Measured only for the cross-conversation row so far (`workflow-runs.md` §19.1; `workflow-designer.md` §21.1). The in-turn rows are directions to measure before any pattern ships." §10 → "The in-turn cost and TTFT directions in §7 are unmeasured"
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md §10 ("No prompt-panel fan-out exists")
+- **Source**: research/2026-11-27.md ▸ Spec sync row 6
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: → "No builtin tool writes a PDF (prompt steps cover the panel since 2026-11-22)"
+- **Status**: open
+
+### [2026-11-27] Spec sync: multi-agent-patterns.md header, Related (workflow-runs is no longer a proposal)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 7; `workflow-runs.md:3`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: name `workflow-designer.md` beside `workflow-runs.md`: step 1 built; step 2 (agent, prompt and checklist steps, version pinning) built; all off by default.
+- **Status**: open
+
+### [2026-11-27] Spec sync: workflow-runs.md §6.4 (checklist steps built)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 8
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: append "*2026-11-22 (later):* checklist steps built and dev-validated (`workflow-designer.md` §22)."
+- **Status**: open
+
+### [2026-11-27] Spec sync: workflow-runs.md §13 (step 2 adds Runtime variables)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 9; `inference-agentcore-construct.ts:534,538,543`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "The Runtime needs no variable in steps 1 and 2" → step 1 needs none; step 2's prompt steps, checklist steps and version pinning each add a Runtime copy, written only while the whole chain is on.
+- **Status**: open
+
+### [2026-11-27] Spec sync: workflow-runs.md §14 item 2 (D.6–D.8 built)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 10
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "Prompt and checklist steps are decided after D.5." → "Prompt steps (D.6), checklist steps (D.7) and version pinning (D.8) followed, built and dev-validated by 2026-11-24."
+- **Status**: open
+
+### [2026-11-27] Spec sync: agent-handoffs-and-consults.md §4.2 (`handoff_context` fields)
+- **Source**: research/2026-11-27.md ▸ Spec sync row 11; `apis/shared/handoff/turn.py:104,107,113`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "`handoff_context: {handoffId, text}`" → "`handoff_context: {handoffId, text, fileIds?, agentVersion?}`" (`fileIds` from PR-0.4a §4.9; `agentVersion` from a pinned workflow step, `workflow-designer.md` §23). Also: the [2026-11-20] workflow-runs §0 Status item is fixed at `workflow-runs.md:3` and can be resolved.
+- **Status**: open
+
 ### [2026-11-20] Lift the 365-day Memory expiry clamp to AgentCore's new 10-year limit, then re-scope the 90-day-cliff chores
 - **Source**: research/2026-11-20.md ▸ Top 5 #1; https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-bedrock-agentcore-memory-10-year-retention/
 - **Surface**: infrastructure (`config.ts:1374-1375` `AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS`, `:2543`, `:3011`; `memory-construct.ts:82`) + ops (the [2026-10-07] archive-backfill and cliff-prune chores)
