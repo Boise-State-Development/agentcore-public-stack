@@ -1,6 +1,6 @@
 # Quiet Watcher — The Second Triage Stage
 
-**Status:** Design. PR T.1 (record the probe, §8.1) and PR T.2 (tier 1 in shadow, §8.2) are built behind `WATCH_TRIAGE_ENABLED`. Nothing past them is built.
+**Status:** Design. PR T.1 (record the probe, §8.1) and PR T.2 (tier 1 in shadow, §8.2) are built behind `WATCH_TRIAGE_ENABLED`. The T.2 shadow readout runs until about 2026-12-04 (§8.3). Nothing past it is built.
 **Date:** 2026-11-25
 **Targets branch:** `develop`
 **Parent:** `docs/specs/quiet-watcher.md` (slice 1). This is the "second triage stage" its §5 dev-readout row and its §6 readout leave open. Gap context: `docs/specs/proactive-agent-gaps.md` G2 ("Triage split") and §3's target of under $0.001 per quiet run.
@@ -483,6 +483,36 @@ So the PR plan (§8) builds tier 1 and the shadow first. **Tier 2 is built only 
 - **No `C#` row.** The triage makes no model call, so tier 1 costs Runtime compute and the probe's tool calls only.
 - **`WATCH_TRIAGE_MAX_STALENESS_HOURS`** is read by the worker (default 24, kept between 1 hour and 30 days). It isn't wired through CDK, so a deployment changes it on the worker's environment.
 - **The run history** gains `triage` on `ScheduleRun` and on the SPA's `ScheduleRun` type. Nothing renders it while triage runs in shadow.
+
+### 8.3 The T.2 shadow readout (running)
+
+**Started 2026-11-27. The readout and the tier 2 go/no-go are due about 2026-12-04**, when it goes into this section.
+
+Five watchers run on the dev user's own tools. Each prompt is written so that only a real change notifies:
+
+| Watcher | Source | Model, cadence | What it covers |
+|---|---|---|---|
+| account (stable) | `whoami` | Haiku 5.5, 15 min | A result that never changes |
+| static page (stable) | `fetch_url_content`, a static public page | Haiku 4.5, 30 min | A stable web page, and the Haiku 4.5 cost line |
+| random id (volatile) | `fetch_url_content`, a random-id endpoint | Haiku 5.5, 15 min | A result that differs on every call and is never a finding |
+| clock (volatile) | `fetch_url_content`, a public time API | Haiku 5.5, 15 min | The same, from a timestamp |
+| new commits (findings) | `fetch_url_content`, a busy public repo's newest commit | Haiku 5.5, 15 min | Real findings, so the shadow has positives to check against |
+
+Choices made:
+
+- **The Haiku 4.5 watcher runs at 30 minutes, not 15.** At 15 it alone would cost about $6 for the week. The per-run comparison doesn't need the same cadence, because both cadences are past the 5-minute cache life, so every run on either model is cold.
+- **No write-tool watcher.** Every write tool the dev user has would create something real on each run, so `write_tool` is counted only if a natural run makes one.
+- **The estimate is about $6.5 for the week:** about $3.4 for the four Haiku 5.5 watchers and about $3 for the Haiku 4.5 one. The triage itself makes no model call.
+
+`backend/scripts/watch_triage_readout.py` reads the rows. Its rules are in `apis/shared/scheduled_prompts/triage_readout.py`. Per watcher it reports:
+
+- runs, outcomes, verdicts and reasons;
+- the settle rate, shown as `—` under 20 triaged runs;
+- the triage's p50 and p95 duration;
+- shadow misses, by run id, to read by hand;
+- the full runs' cost at the catalog's rates.
+
+It prints no user, schedule or content ids.
 
 T.1 and T.2 can ship before anyone decides on tier 2. A deployment that never assigns a `watch_triage` model gets tier 1 alone.
 
