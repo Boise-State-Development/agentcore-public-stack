@@ -115,6 +115,18 @@ async function parseConflictMessage(response: Response): Promise<string> {
 }
 
 /**
+ * Whether a parsed `reasoning` frame carries text the user can read. The
+ * stream also sends empty frames and signature-only ones on that event.
+ */
+function carriesReasoningText(data: unknown): boolean {
+  if (typeof data !== 'object' || data === null) {
+    return false;
+  }
+  const text = (data as { reasoningText?: unknown }).reasoningText;
+  return typeof text === 'string' && text.trim().length > 0;
+}
+
+/**
  * What the user reads on a message that was not sent. The Runtime's own
  * wording for a refused access token describes our plumbing, not anything the
  * user did or can act on; the app-api proxy already retries that case once
@@ -384,6 +396,12 @@ export class ChatHttpService {
                 console.warn('Failed to parse SSE data:', msg.data);
                 parsedData = msg.data;
               }
+            }
+            // The first-visible clock: thinking text is output the user can
+            // read, so the first of it is noted here and reported with the
+            // first delta above. Empty and signature-only frames don't count.
+            if (msg.event === 'reasoning' && isCurrentStream() && carriesReasoningText(parsedData)) {
+              this.turnTiming.firstVisible(sessionId);
             }
             this.streamParserService.parseEventSourceMessage(
               sessionId,

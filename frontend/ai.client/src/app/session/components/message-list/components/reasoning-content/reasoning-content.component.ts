@@ -1,16 +1,29 @@
 import {
   Component,
+  ElementRef,
+  afterRenderEffect,
+  effect,
+  inject,
   input,
   signal,
   computed,
+  untracked,
+  viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle } from '@ng-icons/heroicons/outline';
 import { ContentBlock, ReasoningContentData } from '../../../../services/models/message.model';
 import { formatThinkingDuration, latestCompleteSentence } from './reasoning-text';
 
 let nextPanelId = 0;
+
+/** The most the one-line preview beside the headline shows. */
+const PREVIEW_MAX_CHARS = 80;
+
+/** How close to the end of the live box still counts as reading the end: about a line. */
+const FOLLOW_TAIL_SLACK_PX = 24;
 
 /**
  * The model's reasoning, drawn as a sibling of the tool rail rather than a
@@ -20,6 +33,11 @@ let nextPanelId = 0;
  * to the answer", and they sit one above the other in a turn, so they should
  * read as one family. The headline group is NAMED (`group/reasoning`) for
  * the reason the rail's is: the message card is itself a `group`.
+ *
+ * While the model is still thinking the box opens on its own and follows the
+ * text as it streams, so the seconds before the answer are spent reading
+ * rather than waiting. It closes again the moment the model starts answering.
+ * A reloaded conversation never opens it: only a block that is streaming does.
  */
 @Component({
   selector: 'app-reasoning-content',
@@ -63,6 +81,12 @@ let nextPanelId = 0;
       }
     </button>
 
+    <!-- Says that thinking started and stopped, and nothing else. The text
+         itself is not a live region: it changes several times a second, and a
+         screen reader would read the whole of it over the answer. It is one
+         Tab away in the box below, which opens without taking focus. -->
+    <span class="sr-only" role="status">{{ announcement() }}</span>
+
     <!-- Collapsed content is inert: a 0fr row clips it from view but would
          still put the scroll box in the tab order. -->
     <div
@@ -74,11 +98,17 @@ let nextPanelId = 0;
       <div>
         <div class="mt-2 overflow-hidden rounded-lg border border-gray-200/80 dark:border-white/10">
           @if (hasReasoningText()) {
+            <!-- Shorter while it streams: it is a glimpse of work in progress
+                 above an answer that has not started, not the whole record. -->
             <div
-              class="reasoning-scroll max-h-80 bg-white/40 px-2.5 py-2 text-xs/5 text-gray-600 dark:bg-transparent dark:text-gray-300"
+              #scrollBox
+              class="reasoning-scroll bg-white/40 px-2.5 py-2 text-xs/5 text-gray-600 dark:bg-transparent dark:text-gray-300"
+              [class.max-h-48]="isThinking()"
+              [class.max-h-80]="!isThinking()"
               tabindex="0"
               role="group"
               aria-label="Reasoning"
+              (scroll)="onBoxScroll(scrollBox)"
             >{{ reasoningText() }}</div>
           }
 
@@ -144,6 +174,17 @@ let nextPanelId = 0;
       outline: 2px solid var(--color-primary-500);
       outline-offset: -2px;
     }
+
+    /* The box opens and closes on its own during a turn, so it must not
+       slide for someone who asked for less motion. */
+    @media (prefers-reduced-motion: reduce) {
+      .chevron,
+      .collapsible-content,
+      .collapsible-content > div,
+      .collapsible-content.open > div {
+        transition: none;
+      }
+    }
   `
 })
 export class ReasoningContentComponent {
@@ -155,8 +196,21 @@ export class ReasoningContentComponent {
 
   protected readonly panelId = `reasoning-panel-${nextPanelId++}`;
 
-  /** Whether the reasoning content is expanded */
-  isExpanded = signal(false);
+  private readonly document = inject(DOCUMENT);
+  private readonly scrollBox = viewChild<ElementRef<HTMLElement>>('scrollBox');
+
+  /** What the user chose by clicking the headline; null until they have. */
+  private readonly userExpanded = signal<boolean | null>(null);
+
+  /** This block was seen thinking by this component, so it is not a reload. */
+  private readonly streamedHere = signal(false);
+
+  /**
+   * Whether the live box is still following the end of the text. Cleared when
+   * the user scrolls back to read something, so the stream stops pulling the
+   * text out from under them.
+   */
+  private followTail = true;
 
   /** Extract reasoning content data from the content block */
   reasoningData = computed(() => {
@@ -191,6 +245,64 @@ export class ReasoningContentComponent {
   );
 
   /**
+   * The box opens itself: the model is thinking and has written more than the
+   * one line beside the headline can hold. A thought that fits on that line is
+   * already fully visible there, so the box does not flash open and shut for
+   * the one-sentence thinking most short questions get.
+   */
+  protected readonly isLive = computed(
+    () => this.isThinking() && this.reasoningText().length > PREVIEW_MAX_CHARS,
+  );
+
+  /** Open when the user chose so, otherwise only while the box is live. */
+  readonly isExpanded = computed(() => this.userExpanded() ?? this.isLive());
+
+  /**
+   * The polite announcement: thinking started, then how long it took. Empty
+   * for a block that never streamed here, so a reloaded conversation is not
+   * read out block by block.
+   */
+  protected readonly announcement = computed(() => {
+    if (!this.streamedHere()) return '';
+    if (this.isThinking()) return 'Thinking';
+    const elapsed = this.durationLabel();
+    return elapsed ? `Thought for ${elapsed}` : '';
+  });
+
+  constructor() {
+    // Thinking started or stopped. On the stop, someone who scrolled back in
+    // the box or put focus in it is reading it, so it stays open for them
+    // instead of closing as the answer arrives.
+    let wasThinking = false;
+    let wasOpen = false;
+    effect(() => {
+      const thinking = this.isThinking();
+      const open = this.isExpanded();
+      if (thinking) {
+        wasThinking = true;
+        wasOpen = open;
+        this.streamedHere.set(true);
+        return;
+      }
+      if (!wasThinking) return;
+      wasThinking = false;
+      if (wasOpen && untracked(this.userExpanded) === null && this.readerIsInTheBox()) {
+        this.userExpanded.set(true);
+      }
+    });
+
+    // Keep the newest line in view while the box is live. Runs after the
+    // render that painted the delta, so `scrollHeight` already includes it.
+    // Setting `scrollTop` jumps; nothing here animates.
+    afterRenderEffect(() => {
+      this.reasoningText();
+      const box = this.scrollBox()?.nativeElement;
+      if (!box || !this.isLive() || !this.followTail) return;
+      box.scrollTop = box.scrollHeight;
+    });
+  }
+
+  /**
    * The header: "Thinking" while the model is still at it, "Thought for 17s"
    * once it has stopped.
    *
@@ -223,11 +335,22 @@ export class ReasoningContentComponent {
     const text = this.reasoningText();
     const raw = this.reasoningData()?.reasoningText?.text ?? '';
     const line = (this.isThinking() && latestCompleteSentence(raw)) || text;
-    return line.length <= 80 ? line : line.substring(0, 80) + '...';
+    return line.length <= PREVIEW_MAX_CHARS ? line : line.substring(0, PREVIEW_MAX_CHARS) + '...';
   });
 
-  /** Toggle expanded state */
+  /** Toggle expanded state. From here on the user's choice stands. */
   toggleExpanded(): void {
-    this.isExpanded.update(expanded => !expanded);
+    this.userExpanded.set(!this.isExpanded());
+  }
+
+  /** The user (or the follow itself) scrolled the box. */
+  protected onBoxScroll(box: HTMLElement): void {
+    this.followTail = box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_TAIL_SLACK_PX;
+  }
+
+  private readerIsInTheBox(): boolean {
+    const box = this.scrollBox()?.nativeElement;
+    if (!box) return false;
+    return !this.followTail || box.contains(this.document.activeElement);
   }
 }

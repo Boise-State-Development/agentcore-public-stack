@@ -49,6 +49,8 @@ describe('TurnTimingService', () => {
     expect(req.request.method).toBe('POST');
     expect(req.request.body).toEqual({
       firstTokenMs: 2360,
+      // No thinking came first, so the first delta was the first thing to read.
+      firstVisibleMs: 2360,
       turnKind: 'first',
       warmAgeMs: 6100,
       modelId: 'us.anthropic.claude-haiku-4-5',
@@ -61,6 +63,44 @@ describe('TurnTimingService', () => {
     req.flush(null, { status: 204, statusText: 'No Content' });
 
     // Later deltas of the same turn report nothing.
+    service.firstToken('conv-1');
+    httpMock.expectNone(URL);
+  });
+
+  it('reports when thinking text first arrived, beside an unchanged firstTokenMs', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const service = setup();
+    service.start('conv-1', { turnKind: 'followup', warmAgeMs: null });
+
+    now.mockReturnValue(3500);
+    service.firstVisible('conv-1');
+    httpMock.expectNone(URL); // nothing goes out until the first token
+    now.mockReturnValue(5200);
+    service.firstVisible('conv-1'); // later thinking text does not move it
+    now.mockReturnValue(19400);
+    service.firstToken('conv-1');
+
+    const req = httpMock.expectOne(URL);
+    expect(req.request.body).toMatchObject({ firstTokenMs: 18400, firstVisibleMs: 2500 });
+    req.flush(null, { status: 204, statusText: 'No Content' });
+  });
+
+  it('thinking text with no send behind it, or after the report, is ignored', () => {
+    const service = setup();
+    service.firstVisible('conv-1');
+    service.start('conv-1', { turnKind: 'followup', warmAgeMs: null });
+    service.firstToken('conv-1');
+    httpMock.expectOne(URL).flush(null, { status: 204, statusText: 'No Content' });
+    service.firstVisible('conv-1');
+    service.firstToken('conv-1');
+    httpMock.expectNone(URL);
+  });
+
+  it('a turn that only thought, then ended, reports nothing', () => {
+    const service = setup();
+    service.start('conv-1', { turnKind: 'first', warmAgeMs: null });
+    service.firstVisible('conv-1');
+    service.abandon('conv-1');
     service.firstToken('conv-1');
     httpMock.expectNone(URL);
   });

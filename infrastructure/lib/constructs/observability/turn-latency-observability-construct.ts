@@ -156,7 +156,10 @@ export class TurnLatencyObservabilityConstruct extends Construct {
           + 'browser and reported by the SPA (`Client*FirstTokenMs`, while `CDK_CLIENT_TURN_TIMING_ENABLED` '
           + 'is on). It is the only row that sees the app-api hop, Runtime routing and session start '
           + '(the V2 restore, and what session prewarm hides). First turns and follow-ups are '
-          + 'separate metrics because a first turn starts its session. Every row below it starts '
+          + 'separate metrics because a first turn starts its session. The second row sets that '
+          + 'clock, which stops on the first streamed delta, beside `ClientFirstVisibleMs`, which '
+          + 'stops on the first output the user can read (thinking text counts): the gap is time '
+          + 'spent reading the model think rather than waiting. Every row below those starts '
           + 'at **inference-api handler entry**: a stage falling there is necessary but **not '
           + 'sufficient** evidence that the user waits less. The controlled check is still `tests/load` '
           + '(Locust TTFB + TTFT). See `docs/specs/turn-path-ttft.md` §6._',
@@ -200,6 +203,39 @@ export class TurnLatencyObservabilityConstruct extends Construct {
           client('ClientFollowUpFirstTokenMs', 'p50', 'follow-up (client) p50', DAY),
           client('FirstTokenMs', 'p50', 'server first token p50', DAY),
           client('TtftProbeColdFirstTokenMs', 'p50', 'probe cold first turn p50', DAY),
+        ],
+        start: '-P30D',
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+    );
+
+    // Row 0a — the same browser clock, stopped twice. `ClientFirstTokenMs`
+    // stops on the first streamed delta; `ClientFirstVisibleMs` on the first
+    // output the user can read, which is the model's thinking text on a turn
+    // that thinks first and the same instant otherwise. The gap between the
+    // lines is the wait that live thinking turned into reading.
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'First visible output vs first token — all turns',
+        left: [
+          client('ClientFirstVisibleMs', 'p50', 'first visible output p50'),
+          client('ClientFirstTokenMs', 'p50', 'first token p50'),
+          client('ClientFirstVisibleMs', 'p90', 'first visible output p90'),
+          client('ClientFirstTokenMs', 'p90', 'first token p90'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Trend: first visible output vs first token, daily, last 30 days',
+        left: [
+          client('ClientFirstVisibleMs', 'p50', 'first visible output p50', DAY),
+          client('ClientFirstTokenMs', 'p50', 'first token p50', DAY),
+          client('ClientFirstVisibleMs', 'p90', 'first visible output p90', DAY),
+          client('ClientFirstTokenMs', 'p90', 'first token p90', DAY),
         ],
         start: '-P30D',
         leftYAxis: { min: 0 },

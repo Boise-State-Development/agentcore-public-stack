@@ -140,6 +140,17 @@ describe('TurnLatencyObservabilityConstruct', () => {
     expect(body.indexOf('User-perceived first token')).toBeLessThan(body.indexOf('Prelude total ('));
   });
 
+  it('sets first visible output beside first answer text, above the server rows', () => {
+    // `ClientFirstTokenMs` stops on the first streamed delta; a turn that thinks
+    // first shows the user its thinking seconds earlier, and only
+    // `ClientFirstVisibleMs` sees that (docs/specs/turn-path-ttft.md §6E).
+    expect(body).toContain('ClientFirstVisibleMs');
+    expect(body).toContain('ClientFirstTokenMs');
+    const row = body.indexOf('First visible output vs first token');
+    expect(row).toBeGreaterThan(body.indexOf('User-perceived first token'));
+    expect(row).toBeLessThan(body.indexOf('Prelude total ('));
+  });
+
   it('has a 30-day daily trend, the view that shows drift', () => {
     expect(body).toContain('-P30D');
     expect(body).toMatch(/period\\*":86400/);

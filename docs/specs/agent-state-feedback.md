@@ -104,6 +104,19 @@ sub-second, both absorbed by whole-second rounding.
 (1) and (2) are the accurate moments; (3) is the backstop for a cycle that
 produced reasoning and nothing else.
 
+**Live thinking (added 2026-11-26).** While the span is open the block also
+opens its box on its own and follows the text as it streams, in a shorter box
+(`max-h-48`) than the one a click opens, then closes when the span closes. It
+opens only once the text is longer than the one-line preview can show, so a
+one-sentence thought stays on the headline and nothing flashes open and shut.
+A click is the user's choice from then on, and a reader who scrolled back in
+the box or put focus in it keeps it open when the answer starts. It never takes
+focus, the text is not a live region (a visually hidden status says "Thinking",
+then "Thought for 17s"), and the open and close do not animate under
+`prefers-reduced-motion`. A reloaded block is never streaming, so it renders
+collapsed exactly as before. Reasoning folded into a tool rail is unchanged.
+`ClientFirstVisibleMs` measures what this buys (`turn-path-ttft.md` §6E).
+
 **Live-only, by construction.** The duration rides `ContentBlock`, which only
 the stream parser populates. `GET /messages` never sets it, so a reloaded
 conversation falls back to `Thinking` with no extra code and no persisted

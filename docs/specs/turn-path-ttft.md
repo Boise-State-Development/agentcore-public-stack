@@ -1056,6 +1056,7 @@ Three instruments, each blind where another sees. Read the user-facing one first
 | Instrument | Clock | Sees | Where |
 |---|---|---|---|
 | `Client*FirstTokenMs` (`features.clientTurnTiming` + `CLIENT_TURN_TIMING_ENABLED`) | The browser: send to first `content_block_delta` | Everything the user waits for: the SPA, the app-api hop, Runtime routing, the session start (a V2 restore) and the model | Top row of the turn-latency dashboard, and its 30-day daily trend |
+| `ClientFirstVisibleMs` (same switches, same report) | The browser: send to the first output the user can read, which is the first `reasoning` frame that carries text, or the first `content_block_delta` when none came before it | The same path, stopped where the user starts reading. On a turn that thinks first it is earlier than `ClientFirstTokenMs` by the thinking the user watched | Second row of the dashboard, beside `ClientFirstTokenMs`, live and as a 30-day daily trend |
 | `FirstTokenMs`, `PreludeTotalMs` and the stage metrics | Inference-api handler entry | The server's share, stage by stage | The rest of the dashboard |
 | The scheduled probe (`TtftProbe*Ms`) | A Fargate task in the VPC, through the Runtime's public data plane | A stable baseline: one fixed turn an hour, independent of traffic mix and volume | Dashboard row 0b and the 30-day trend; the `ttft-probe-not-reporting` alarm |
 
@@ -1064,6 +1065,20 @@ How the client metric is recorded (`apis/app_api/telemetry/routes.py`, `TurnTimi
 - Recorded as EMF under metric names, not dimensions, like every EMF caller here: `ClientFirstTokenMs` on every turn; `ClientFirstTurnFirstTokenMs` or `ClientFollowUpFirstTokenMs`; and, for first turns, `ClientFirstTurnWarmedFirstTokenMs` or `ClientFirstTurnColdFirstTokenMs`. A first turn starts its Runtime session and a follow-up usually finds it running, so one percentile over both moves whenever the mix does.
 - Properties for Logs Insights on the app-api log group: `modelId` (the selected model, even when the request omits it as the default), `warmAgeMs` (time since this tab prewarmed the conversation, or null), `hasAgent`, `hasFiles`, `visible`, `spaVersion` (the bundle that measured it). Every EMF record, on every namespace, also carries the emitting service's `appVersion` and `build` (`docs/specs/release-ledger.md` D1), so a percentile can be read per version without a dimension. No message content, user id or session id.
 - A turn is "first" when this tab knows the conversation as new and it has no messages, so an existing conversation sent to before its history loads stays a follow-up.
+
+**The two browser clocks.** `ClientFirstTokenMs` stops on the first `content_block_delta` and
+its meaning has not changed. The server's own `FirstTokenMs` stops on the first `reasoning`
+event, so on a model that thinks before it answers the two disagree by the length of the
+thinking: over 14 days of prod to 2026-11-26 the browser read p50 6.2 s against the server's
+4.8 s, and on Opus 5.5 18.4 s against 7.1 s. The SPA shows that thinking as it streams (the
+reasoning block opens itself while the model thinks, `ReasoningContentComponent`), so those
+seconds are spent reading, and `ClientFirstVisibleMs` is the clock that says so.
+
+- `firstVisibleMs` rides the same single report as `firstTokenMs`. The SPA notes when the first `reasoning` frame with non-blank `reasoningText` arrives (the event also carries empty and signature-only frames, which are nothing to read) and sends both numbers when the first delta lands. A turn with no thinking before its first delta sends the two equal, so the metric's percentiles are over all turns, not only the ones that think.
+- app-api records it as `ClientFirstVisibleMs`, one metric name, and clamps it to `firstTokenMs`: the first token is itself readable, so a later value is a client bug. A report without the field (a tab still on a bundle from before it) records no `ClientFirstVisibleMs`, so during a deploy its sample count runs under `ClientFirstTokenMs`'s.
+- Read the pair, not the new number alone: `ClientFirstTokenMs − ClientFirstVisibleMs` on one record is how long that user read thinking before the answer began. In Logs Insights on the app-api log group, `filter source = "spa" | stats pct(ClientFirstTokenMs - ClientFirstVisibleMs, 50) by modelId` splits it by model.
+- It measures arrival, not attention: a thought short enough to fit the one line beside the "Thinking" headline is shown there, and a longer one in the box that opens under it. Either way the text is on screen when the frame arrives.
+- Measured on dev on 2026-11-26, one turn each, in the browser, counted from the stream's response headers: Haiku 5.5 first thinking text at 3.0 s and first delta at 4.5 s; Sonnet 5.5 8.8 s and 24.2 s (183 text frames spread across the 15 s between); Opus 5.5 6.5 s and 25.7 s (209 frames). All three stream summarized thinking incrementally, not as one block when thinking ends.
 
 How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`):
 - Hourly (`cron(17 * * * ? *)`), as a one-off Fargate task on app-api's own task definition family, with app-api's environment and role and the session retention pruner's schedule role (no new IAM resources; the stack is near CloudFormation's 500-resource limit).

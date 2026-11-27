@@ -15,7 +15,12 @@ Written as EMF into ``AgentCoreStack/TurnLatency`` beside the server stages:
   mix does;
 - for first turns, ``ClientFirstTurnWarmedFirstTokenMs`` or
   ``ClientFirstTurnColdFirstTokenMs``, which tracks what session prewarm is
-  worth over time.
+  worth over time;
+- ``ClientFirstVisibleMs`` when the report carries ``firstVisibleMs``: send to
+  the first output the user could read, which is the first thinking text on a
+  turn that thinks before it answers and the first token otherwise. Read it
+  against ``ClientFirstTokenMs``; the gap is time spent reading the model's
+  thinking rather than waiting.
 
 Metric names rather than dimensions, like every EMF caller here. The model id,
 the warm's age and the turn's shape ride as log properties for Logs Insights.
@@ -55,6 +60,10 @@ class TurnTimingReport(BaseModel):
     """One turn, as the browser saw it."""
 
     first_token_ms: int = Field(alias="firstTokenMs", ge=0, le=_MAX_FIRST_TOKEN_MS)
+    # Send to the first readable output: the first thinking text, or the first
+    # token when the model did not think first. None from a bundle that predates
+    # the field, which then records no ``ClientFirstVisibleMs``.
+    first_visible_ms: Optional[int] = Field(default=None, alias="firstVisibleMs", ge=0, le=_MAX_FIRST_TOKEN_MS)
     turn_kind: Literal["first", "followup"] = Field(alias="turnKind")
     model_id: Optional[str] = Field(default=None, alias="modelId", max_length=200)
     # Milliseconds between the session prewarm and the send, or None when the
@@ -121,6 +130,10 @@ def metrics_for(report: TurnTimingReport) -> Dict[str, int]:
         metrics["ClientPrepareTreatedFirstTokenMs"] = value
     elif report.prepare_arm == "holdout":
         metrics["ClientPrepareHoldoutFirstTokenMs"] = value
+    if report.first_visible_ms is not None:
+        # The first token is itself readable output, so it bounds this from
+        # above; a later value is a client bug, not a slower turn.
+        metrics["ClientFirstVisibleMs"] = min(report.first_visible_ms, value)
     return metrics
 
 
