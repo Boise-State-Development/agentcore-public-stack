@@ -37,6 +37,7 @@ REGION = "us-east-1"
 TABLE = "test-sessions-metadata-resume-claim"
 SESSION = "headless-0000000000000001"
 INTERRUPT_ID = "v1:tool_call:tu-ask:ask_user_question"
+REPORT = {"outcome": "nothing_new", "state": {"cursors": {"calendar": "Work"}}}
 
 
 @pytest.fixture
@@ -81,7 +82,7 @@ def app(make_user):
     return application
 
 
-async def _pause(user_id: str) -> None:
+async def _pause(user_id: str, run_mode: Optional[str] = None) -> None:
     """A headless run's question pause, written through the real metadata code."""
     from apis.shared.sessions.metadata import ensure_session_metadata_exists, set_paused_turn
     from apis.shared.sessions.models import PausedTurnSnapshot
@@ -99,6 +100,7 @@ async def _pause(user_id: str) -> None:
             agent_type="chat",
             captured_at=now.isoformat(),
             expires_at=(now + timedelta(days=7)).isoformat(),
+            run_mode=run_mode,
         ),
     )
 
@@ -124,6 +126,10 @@ class _Turn:
         state.interrupts = {INTERRUPT_ID: MagicMock()}
         agent.agent = MagicMock()
         agent.agent._interrupt_state = state
+        # What the paused run wrote before it paused: a `report` the resumed leg must not count.
+        agent.agent.messages = [
+            {"role": "assistant", "content": [{"toolUse": {"name": "report", "input": {"outcome": "nothing_new"}}}]},
+        ]
         turn = self
 
         async def stream(*_a: Any, **_k: Any):
@@ -133,6 +139,7 @@ class _Turn:
                 await during()
             # The resumed tool call's one result, then the turn ends unpaused.
             turn.history.append({"toolResult": INTERRUPT_ID})
+            agent.agent.messages.append({"role": "assistant", "content": [{"toolUse": {"name": "report", "input": REPORT}}]})
             state.activated = False
             yield "event: done\ndata: {}\n\n"
 
@@ -292,3 +299,39 @@ class TestOneResumePerPause:
                 await client.post("/invocations", json=_answer("Work"))
 
         assert owners["before"] and owners["after"] == owners["before"]
+
+
+class TestWatchResumeLeavesItsReport:
+    """#2490: a watch run's finished resume records its `report` for the worker's hold check."""
+
+    async def _meta(self, user_id: str) -> dict:
+        from apis.shared.sessions.metadata import _get_session_by_gsi, get_dynamodb_table
+
+        return await _get_session_by_gsi(SESSION, user_id, get_dynamodb_table(TABLE)) or {}
+
+    @pytest.mark.asyncio
+    async def test_the_resumed_legs_report_lands_with_the_end_of_the_pause(self, table, app):
+        await _pause(app.state.user_id, run_mode="watch")
+        turn = _Turn()
+        get_agent, quota = _patches(turn)
+        with get_agent, quota:
+            async with _client(app) as client:
+                answered = await client.post("/invocations", json=_answer("Work"))
+
+        assert _stream_error(answered.text) is None
+        row = await self._meta(app.state.user_id)
+        assert "pausedTurn" not in row
+        assert row["watchResumeReport"]["report"] == REPORT
+        assert row["watchResumeReport"]["finishedAt"]
+
+    @pytest.mark.asyncio
+    async def test_any_other_resume_records_nothing(self, table, app):
+        await _pause(app.state.user_id)
+        turn = _Turn()
+        get_agent, quota = _patches(turn)
+        with get_agent, quota:
+            async with _client(app) as client:
+                await client.post("/invocations", json=_answer("Work"))
+
+        row = await self._meta(app.state.user_id)
+        assert "pausedTurn" not in row and "watchResumeReport" not in row

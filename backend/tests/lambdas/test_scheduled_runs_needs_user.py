@@ -257,7 +257,7 @@ class TestHold:
         async def no_read(*_args, **_kwargs):
             raise AssertionError("an expired hold reads nothing")
 
-        monkeypatch.setattr("lambdas.scheduled_runs_worker.worker._pause_still_live", no_read)
+        monkeypatch.setattr("lambdas.scheduled_runs_worker.worker._load_meta_row", no_read)
         calls = _stub(monkeypatch, _result(trace=[_report(outcome="nothing_new")]))
 
         assert (await _run(schedule))["result"] == "quiet"

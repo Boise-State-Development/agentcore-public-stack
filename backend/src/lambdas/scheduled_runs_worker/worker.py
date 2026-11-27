@@ -92,7 +92,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from apis.shared.harness import (
     CognitoRefreshBearerAuth,
@@ -106,6 +106,7 @@ from apis.shared.harness import (
 from apis.shared.feature_flags import proactive_runs_enabled, watch_triage_enabled
 from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
+from apis.shared.scheduled_prompts.conversation_resume import WATCH_RESUME_REPORT_ATTR, apply_conversation_resume
 from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX, ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.needs_user import (
@@ -409,11 +410,10 @@ async def _load_meta_row(session_id: str, user_id: str) -> Optional[Dict[str, An
     return (await load_session_meta(session_id, user_id)).row
 
 
-async def _pause_still_live(user_id: str, session_id: str) -> bool:
-    """Whether ``session_id`` still waits on the user (``derive_awaiting_input``'s rule)."""
+def _pause_live_in(row: Optional[Dict[str, Any]]) -> bool:
+    """Whether a session's ``META`` row still waits on the user (``derive_awaiting_input``'s rule)."""
     from apis.shared.sessions.models import derive_awaiting_input
 
-    row = await _load_meta_row(session_id, user_id)
     if not row:
         return False
     kinds = [(item or {}).get("kind") for item in row.get("pendingInterrupts") or [] if isinstance(item, dict)]
@@ -422,23 +422,40 @@ async def _pause_still_live(user_id: str, session_id: str) -> bool:
     return derive_awaiting_input(kinds, expires_at) is not None
 
 
-async def _watcher_holds(schedule: ScheduledPrompt, state: Optional[WatchState]) -> bool:
-    """Whether a watcher skips this run because an earlier run still waits on the user (§3.2).
+async def _watcher_holds(
+    schedule: ScheduledPrompt, state: Optional[WatchState]
+) -> Tuple[bool, Optional[WatchState]]:
+    """Whether a watcher skips this run because an earlier run still waits on the user (§3.2),
+    and the state the run should start from.
 
-    Reads the paused session's ``META`` only while a hold is set and unexpired.
-    A hold whose pause has gone (answered, superseded or expired) is cleared,
-    and the watcher runs. Fails open: an error clears nothing and runs.
+    Reads the paused session's ``META`` only while a hold is set and unexpired. A hold whose
+    pause has gone (answered, superseded or expired) ends, and the watcher runs. When the pause was answered
+    in its conversation, the Runtime left that resume's ``report`` on the row
+    (``conversation_resume``); it is saved here and the hold ended in one conditional write,
+    so the run starts past the finding instead of asking again (#2490), and the state is
+    read again for the run. A bell resume ended the hold in its own save, so its record is
+    never read. Fails open: an error clears nothing and runs.
     """
     if state is None or not state.paused_session_id:
-        return False
+        return False, state
     session_id = state.paused_session_id
     try:
-        if state.holding() and await _pause_still_live(schedule.user_id, session_id):
-            return True
+        row = await _load_meta_row(session_id, schedule.user_id) if state.holding() else None
+        if _pause_live_in(row):
+            return True, state
+        record = (row or {}).get(WATCH_RESUME_REPORT_ATTR)
+        if isinstance(record, dict):
+            saved = await asyncio.to_thread(
+                apply_conversation_resume, schedule.user_id, schedule.schedule_id, schedule.label, state, record
+            )
+            if saved:
+                logger.info(f"Schedule {schedule.schedule_id}: saved the report of a run answered in its conversation")
+                return False, await asyncio.to_thread(get_watch_state, schedule.user_id, schedule.schedule_id)
+            logger.warning(f"Schedule {schedule.schedule_id}: watcher state moved on; the conversation's report not saved")
         await asyncio.to_thread(clear_watch_pause, schedule.user_id, schedule.schedule_id, session_id=session_id)
     except Exception:
         logger.warning(f"Schedule {schedule.schedule_id}: could not check the watcher's hold", exc_info=True)
-    return False
+    return False, state
 
 
 def _notify_needs_user(schedule: ScheduledPrompt, result: RunResult, prompts, expires_at: Optional[str]) -> bool:
@@ -598,7 +615,8 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if watch:
             watch_state = await asyncio.to_thread(get_watch_state, user_id, schedule_id)
-            if await _watcher_holds(schedule, watch_state):
+            held, watch_state = await _watcher_holds(schedule, watch_state)
+            if held:
                 # Nothing is invoked and no history row is written: the
                 # schedule page shows the wait from the state (§3.8).
                 logger.info(f"Schedule {schedule_id}: holding while an earlier run waits on the user")

@@ -292,6 +292,22 @@ async def _lease_heartbeat_loop(lease, agent, cancel_signal: Optional[threading.
             return
 
 
+def _watch_resume_report(agent, messages_from: Optional[int]) -> Optional[dict]:
+    """A finished watch-run resume's ``report``, for the worker to save at its hold check (#2490).
+
+    ``None`` for any other resume. Read from the messages this resume appended, after the
+    stream; pure, no IO. A bell resume records one too, harmlessly: its worker ends the hold in
+    its own save, and the hold check is the only reader (``conversation_resume``).
+    """
+    if messages_from is None:
+        return None
+    from apis.shared.scheduled_prompts.conversation_resume import report_from_messages, resume_report_record
+    from apis.shared.timestamps import utc_now_iso
+
+    messages = list(getattr(getattr(agent, "agent", None), "messages", None) or [])
+    return resume_report_record(report_from_messages(messages[messages_from:]), utc_now_iso())
+
+
 async def _release_resume_claim(claim) -> None:
     """Give a resume's claim on its pause back, so the next answer can run the turn.
 
@@ -7551,8 +7567,13 @@ async def _run_invocation(
 
         # Resume requests must target interrupts that the cached agent
         # actually has paused; see `_validate_resume_interrupts`.
+        # A quiet watcher's paused run resumed here (from the bell or its conversation) saves
+        # its resumed `report` at the end; where its messages start is all it needs now (#2490).
+        watch_resume_from: Optional[int] = None
         if is_resume:
             _validate_resume_interrupts(agent, input_data)
+            if snapshot.run_mode == "watch":
+                watch_resume_from = len(getattr(getattr(agent, "agent", None), "messages", None) or [])
 
         # Citations to persist and to stream ahead of the answer. Empty when
         # the Agent hides them, which switches off every downstream consumer.
@@ -7910,6 +7931,7 @@ async def _run_invocation(
                         await clear_paused_turn(
                             session_id=input_data.session_id,
                             user_id=user_id,
+                            watch_resume_report=_watch_resume_report(agent, watch_resume_from),
                         )
                 except Exception as cleanup_err:
                     logger.error("Failed to clear resolved pending_interrupts: %s", cleanup_err, exc_info=True)
