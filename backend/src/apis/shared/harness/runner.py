@@ -379,6 +379,7 @@ async def run_agent_headless(
     if first_text_at is not None:
         result.client_first_token_ms = int((first_text_at - sent_at) * 1000)
     result.turn_duration_ms = acc.turn_duration_ms
+    result.cost_usd = acc.cost_usd
     result.quota_exceeded = acc.quota_exceeded
     result.watch_probe = acc.watch_probe
     result.first_token_ms = acc.first_token_ms

@@ -14,6 +14,9 @@ worker's event retry into a second resume (the start mark would stop it anyway).
 | any other error, timeout | answered, failed | failed |
 | oauth_required | answered, waiting_again; a row naming the consent | waiting_again |
 
+Every row a resume writes onto adds its ``costUsd`` (docs/specs/proactive-trust.md §4.1); the
+worker adds the same cost to the schedule's day (``budget.count_run_cost``) after this returns.
+
 A resume never pauses or resumes the schedule and never moves ``lastRunSessionId``. For a
 watcher, a finished resume saves the resumed ``report``'s cursors, tracking and seen keys and
 ends the hold in one conditional write, and writes no ``agent_item`` rows (settled question 3).
@@ -127,6 +130,7 @@ async def _record_history(
         usage=result.usage,
         expires_at=expires_at,
         prompt_count=prompt_count,
+        cost_usd=result.cost_usd,
     )
 
 

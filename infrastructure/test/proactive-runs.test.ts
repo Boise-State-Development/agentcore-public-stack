@@ -180,6 +180,43 @@ function appApiInvokesWorker(template: Template): 'invokePolicy' | 'elsewhere' |
   return found;
 }
 
+describe('the default schedule budget (proactive-trust §4.3)', () => {
+  const ENV = 'CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY';
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env[ENV];
+    delete process.env[ENV];
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV];
+    else process.env[ENV] = saved;
+  });
+
+  it('is $0.50 when unset or blank, as the workflow forwards it', () => {
+    expect(load().proactiveRuns.scheduleDefaultMaxCostPerDay).toBe('0.50');
+    process.env[ENV] = '';
+    expect(load().proactiveRuns.scheduleDefaultMaxCostPerDay).toBe('0.50');
+  });
+
+  it('takes the variable over the context', () => {
+    expect(load({ proactiveRuns: { scheduleDefaultMaxCostPerDay: '0.75' } }).proactiveRuns.scheduleDefaultMaxCostPerDay).toBe('0.75');
+    process.env[ENV] = '1.25';
+    expect(load({ proactiveRuns: { scheduleDefaultMaxCostPerDay: '0.75' } }).proactiveRuns.scheduleDefaultMaxCostPerDay).toBe('1.25');
+  });
+
+  it('fails synth on a value that is not a positive number', () => {
+    for (const bad of ['0', '-1', 'abc', '1e3', '$0.50']) {
+      process.env[ENV] = bad;
+      expect(() => load()).toThrow(/CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY/);
+    }
+  });
+
+  it('is written to app-api whatever the flag says', () => {
+    expect(appApiEnv(synth(false)).SCHEDULE_DEFAULT_MAX_COST_PER_DAY).toBe('0.50');
+    expect(appApiEnv(synth(true)).SCHEDULE_DEFAULT_MAX_COST_PER_DAY).toBe('0.50');
+  });
+});
+
 describe('answering from the inbox', () => {
   let off: Template;
   let on: Template;

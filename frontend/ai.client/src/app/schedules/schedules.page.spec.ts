@@ -181,6 +181,9 @@ describe('SchedulesPage', () => {
     expect(
       component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'max_runs_per_day_exceeded' })),
     ).toBe('Stopped after reaching its daily run limit.');
+    expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'budget' }))).toBe(
+      'Stopped after reaching its daily budget three days in a row.',
+    );
     // Sign-in and reconnect have their own line and action, so no second sentence.
     expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'reauth_required' }))).toBeNull();
     expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'oauth_required' }))).toBeNull();

@@ -75,6 +75,11 @@ export const SCHEDULE_STOPS: Record<string, { mine: string; theirs: string }> = 
   },
   oauth_required: { mine: 'until you reconnect a tool it uses', theirs: 'until its creator reconnects a tool it uses' },
   max_runs_per_day_exceeded: { mine: 'after reaching its daily run limit', theirs: 'after reaching its daily run limit' },
+  // A personal schedule's daily budget, reached three days in a row (proactive-trust §4.2).
+  budget: {
+    mine: 'after reaching its daily budget three days in a row',
+    theirs: 'after reaching its daily budget three days in a row',
+  },
 };
 
 /**

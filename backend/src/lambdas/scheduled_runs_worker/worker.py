@@ -67,6 +67,15 @@ the full run **regardless**. A failed triage is an escalation, never a failed
 run.
 A standard schedule, or any schedule while the flag is off, runs as before.
 
+While the flag is on, every personal run's cost (``RunResult.cost_usd``) is
+recorded on its history row and added to the schedule's day with one conditional
+count. Reaching ``maxCostPerDay`` holds the schedule until its next local
+midnight with one ``fyi`` bell row, and the third consecutive day pauses it
+(``stateReason: "budget"``). A run with no cost frame is ``costPending``, and the
+schedule's next run fills it in from the session's ``C#`` rows first
+(docs/specs/proactive-trust.md §4.1–§4.2). An inbox resume's cost counts too,
+though a resume is never refused for the budget.
+
 A run that paused on the user (``needs_user``: a tool approval, a question, a
 form or a browser sign-in, docs/specs/answer-from-inbox.md §3.2) is, while the
 flag is on and for a personal schedule, recorded as done (the streak resets),
@@ -108,6 +117,7 @@ from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.conversation_resume import WATCH_RESUME_REPORT_ATTR, apply_conversation_resume
 from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX, ScheduledPrompt
+from apis.shared.scheduled_prompts.budget import count_run_cost, mark_cost_pending, reconcile_pending_costs
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.needs_user import (
     INBOX_RESUME_KIND,
@@ -185,9 +195,17 @@ async def _record_history(
     ``result`` is the run's outcome when there is one; a run that raised before
     returning gets a fresh run id and now. ``with_session=False`` leaves the
     session off the row (a quiet run, whose conversation is gone).
+
+    Every path that ends a run with a result comes through here once, so this is
+    also where the run's cost is counted toward the schedule's day and its budget
+    applied (docs/specs/proactive-trust.md §4.2, ``budget.count_run_cost``). A run
+    whose cost never arrived is ``costPending`` on its row, for the next run.
     """
     if schedule.project_id or not proactive_runs_enabled():
         return
+    cost_usd = result.cost_usd if result is not None else None
+    session_on_row = result is not None and with_session and bool(result.session_id)
+    cost_pending = cost_usd is None and session_on_row
     await asyncio.to_thread(
         record_schedule_run,
         schedule,
@@ -200,7 +218,13 @@ async def _record_history(
         expires_at=expires_at,
         prompt_count=prompt_count,
         triage=_RUN_TRIAGE.get(),
+        cost_usd=cost_usd,
+        cost_pending=cost_pending,
     )
+    if cost_pending:
+        await asyncio.to_thread(mark_cost_pending, schedule.user_id, schedule.schedule_id)
+    elif cost_usd is not None:
+        await count_run_cost(schedule, cost_usd)
 
 
 async def _record_project_run(schedule: ScheduledPrompt, status: str, share_id: Optional[str] = None) -> None:
@@ -603,6 +627,13 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
         # re-armed it and before this run started: the pause wins.
         logger.info(f"Scheduled-runs worker: schedule {schedule_id} is {schedule.state}; dropping run")
         return {"scheduleId": schedule_id, "result": "dropped"}
+    if proactive_runs_enabled() and not schedule.project_id and schedule.cost_pending_runs > 0:
+        # An earlier run's cost never arrived: fill it in from its session's C# rows,
+        # which have long landed (proactive-trust §4.1). If that spends today's
+        # budget, this run is held like any other over-budget one.
+        if await reconcile_pending_costs(schedule) is not None:
+            logger.info(f"Scheduled-runs worker: schedule {schedule_id} reached its budget; not running")
+            return {"scheduleId": schedule_id, "result": "held_budget"}
 
     run_config: Dict[str, Any] = {}
     if schedule.model_id:
@@ -820,6 +851,11 @@ async def run_inbox_resume(payload: Dict[str, Any]) -> Dict[str, Any]:
         watch_state=watch_state,
         service=service,
     )
+    if schedule is not None and not schedule.project_id and proactive_runs_enabled():
+        # The user chose to answer, so a resume is never refused for the budget, but its
+        # cost counts toward the day and can be what reaches it (proactive-trust §4.2).
+        # The history row already added it (``finish_resumed_run``).
+        await count_run_cost(schedule, result.cost_usd)
     logger.info(f"Inbox resume {resume_run_id}: {summary}")
     return summary
 

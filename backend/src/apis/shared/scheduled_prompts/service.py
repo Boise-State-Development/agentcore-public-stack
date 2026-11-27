@@ -18,6 +18,7 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -245,6 +246,7 @@ async def create_scheduled_prompt(
     publish_outputs: bool = False,
     mode: ScheduleMode = "standard",
     model_id: Optional[str] = None,
+    max_cost_per_day: Optional[Decimal] = None,
 ) -> ScheduledPrompt:
     """Create an active scheduled prompt, due at the next occurrence of its cadence.
 
@@ -293,6 +295,7 @@ async def create_scheduled_prompt(
         publish_outputs=publish_outputs,
         mode=mode,
         model_id=model_id,
+        max_cost_per_day=max_cost_per_day,
         created_at=now,
         updated_at=now,
     )
@@ -301,6 +304,9 @@ async def create_scheduled_prompt(
     if schedule.mode == "standard":
         # A standard schedule's record is exactly what it was before watchers.
         item.pop("mode", None)
+    # Kept by the worker as runs happen; a schedule starts with none of them.
+    for counter in ("spendToday", "budgetDaysAtLimit", "costPendingRuns"):
+        item.pop(counter, None)
     item["PK"] = f"USER#{user_id}"
     item["SK"] = f"SCHEDPROMPT#{schedule.schedule_id}"
     item["GSI3_PK"] = DUE_INDEX_PK
@@ -594,6 +600,7 @@ async def update_scheduled_prompt(
     publish_outputs: Optional[bool] = None,
     mode: Optional[ScheduleMode] = None,
     model_id: Union[str, None, _Unset] = UNSET,
+    max_cost_per_day: Union[Decimal, None, _Unset] = UNSET,
 ) -> Optional[ScheduledPrompt]:
     """Edit a schedule's fields in place.
 
@@ -612,7 +619,14 @@ async def update_scheduled_prompt(
     All other fields keep the plain ``None`` == "leave unchanged" contract;
     ``mode="standard"`` removes the attribute, so a standard schedule's record
     reads as it did before watchers.
+
+    ``max_cost_per_day`` is clearable the same way (docs/specs/proactive-trust.md
+    §4.2). A recomputed ``next_run_at`` never lands before a budget hold ends,
+    except that a budget raised above today's spend (or cleared) releases the
+    hold and recomputes ``next_run_at`` from now, so the schedule runs again today.
     """
+    from .budget import active_hold, respect_hold, spend_for_today, to_usd, utc_now
+
     if timezone_name is not None:
         _zone(timezone_name)  # a paused schedule stores it unread until it resumes
     schedule = await get_scheduled_prompt(user_id, schedule_id)
@@ -635,11 +649,21 @@ async def update_scheduled_prompt(
         or new_timezone != schedule.timezone
     )
 
+    now_dt = utc_now()
+    release_hold = False
+    if not isinstance(max_cost_per_day, _Unset) and active_hold(schedule, now_dt):
+        new_budget = to_usd(max_cost_per_day)
+        release_hold = new_budget is None or new_budget > spend_for_today(schedule, now_dt)
+
     names: dict = {}
     values = {":updated_at": _get_current_timestamp()}
     set_parts = ["updatedAt = :updated_at"]
+    remove_parts: List[str] = []
 
-    if cadence_changed:
+    if release_hold:
+        remove_parts.append("budgetHoldUntil")
+
+    if cadence_changed or (release_hold and schedule.state == "active"):
         names["#tz"] = "timezone"
         set_parts += ["cadence = :cadence", "hourLocal = :hour_local", "#tz = :timezone"]
         values[":cadence"] = new_cadence
@@ -663,6 +687,8 @@ async def update_scheduled_prompt(
                 weekday=new_weekday,
                 interval_minutes=interval_to_minutes(new_interval_value, new_interval_unit),
             )
+            if not release_hold:
+                next_run_at = respect_hold(schedule, next_run_at, now_dt)
             set_parts += ["nextRunAt = :next", "GSI3_PK = :gsipk", "GSI3_SK = :gsisk"]
             values[":next"] = next_run_at
             values[":gsipk"] = DUE_INDEX_PK
@@ -683,7 +709,6 @@ async def update_scheduled_prompt(
 
     # Clearable fields: UNSET == leave, None == clear (REMOVE the attribute),
     # any other value == set.
-    remove_parts: List[str] = []
     if mode == "standard":
         remove_parts.append("#mode")
         names["#mode"] = "mode"
@@ -691,7 +716,12 @@ async def update_scheduled_prompt(
         set_parts.append("#mode = :mode")
         names["#mode"] = "mode"
         values[":mode"] = mode
-    for attr, value in (("assistantId", assistant_id), ("enabledTools", enabled_tools), ("modelId", model_id)):
+    for attr, value in (
+        ("assistantId", assistant_id),
+        ("enabledTools", enabled_tools),
+        ("modelId", model_id),
+        ("maxCostPerDay", max_cost_per_day),
+    ):
         if isinstance(value, _Unset):
             continue
         if value is None:
